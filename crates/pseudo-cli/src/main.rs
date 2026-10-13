@@ -1,6 +1,10 @@
-use pseudo::diag::Renderer;
-use pseudo::lexer::{Lexer, Tok};
-use pseudo::{Source, compile, explain, vm};
+mod explain;
+
+use pseudo_compiler::compile;
+use pseudo_compiler::lexer::{Lexer, Tok};
+use pseudo_core::Source;
+use pseudo_core::diag::Renderer;
+use pseudo_vm as vm;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -87,7 +91,7 @@ fn with_source(path: &str, f: impl FnOnce(&Source) -> ExitCode) -> ExitCode {
 }
 
 /// Print diagnostics; returns `None` if compilation failed.
-fn report(src: &Source, opts: &Opts) -> Option<pseudo::bytecode::Program> {
+fn report(src: &Source, opts: &Opts) -> Option<pseudo_core::bytecode::Program> {
     let (program, diags) = compile(src);
     let r = Renderer::new(src, opts.color);
     let mut err = io::stderr().lock();

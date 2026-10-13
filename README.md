@@ -153,13 +153,22 @@ The grammar in the specification is implemented, plus:
 
 ## Layout
 
-| Path | Contents |
-|------|----------|
-| `src/lexer.rs` | on-demand lexer |
-| `src/compiler/` | single-pass compiler (`expr`, `stmt`, `decl`, `types`) |
-| `src/bytecode.rs` | instruction set, prototypes, shapes, disassembler |
-| `src/vm/` | interpreter, inline caches, built-ins, files, run-time errors |
-| `src/diag.rs` | diagnostic model and rustc-style renderer |
-| `src/explain.rs` | `pseudo explain` texts |
-| `tests/cli.rs` | end-to-end tests |
+A Cargo workspace, split so that incremental builds only recompile what an
+edit can affect. The compiler and VM depend only on `pseudo-core`, never
+on each other, so a change to one does not rebuild the other.
+
+```
+pseudo (cli) ──► pseudo-compiler ──► pseudo-core
+            └──► pseudo-vm ─────────┘
+```
+
+| Crate | Contents |
+|-------|----------|
+| `crates/pseudo-core` | source spans, diagnostics and renderer, values, bytecode + disassembler, built-in signatures |
+| `crates/pseudo-compiler` | on-demand lexer and single-pass compiler (`expr`, `stmt`, `decl`, `types`) |
+| `crates/pseudo-vm` | interpreter, inline caches, built-in implementations, files, run-time errors |
+| `crates/pseudo-cli` | the `pseudo` binary, `pseudo explain` texts, end-to-end tests |
 | `examples/` | sample programs |
+
+Build with `cargo build --release`, test with `cargo test --workspace`, and
+run with `cargo run -- examples/shapes.pseudo`.

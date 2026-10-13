@@ -1,17 +1,19 @@
 //! A stack-based bytecode VM with Smalltalk-style message dispatch:
 //!
-//! * objects have fixed slot layouts ([`Shape`]s), so field access compiled
+//! * objects have fixed slot layouts (`Shape`s), so field access compiled
 //!   against a known class is a single indexed load;
 //! * every send site owns an inline cache that goes from empty to
-//!   monomorphic to polymorphic (up to [`POLY_MAX`] receiver classes) to
+//!   monomorphic to polymorphic (up to `POLY_MAX` receiver classes) to
 //!   megamorphic;
 //! * megamorphic sites and cache misses go through a global
 //!   `(class, selector) -> method` lookup cache before falling back to a
 //!   walk of the method dictionaries up the superclass chain.
 
-mod builtins;
 mod error;
 mod files;
+mod natives;
+
+use pseudo_core::{bytecode, diag, source, value};
 
 pub use error::RuntimeError;
 use error::{Fault, TraceFrame};

@@ -1,19 +1,30 @@
-[package]
-name = "pseudo"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "A single-pass compiler and Smalltalk-style bytecode VM for Cambridge-style pseudocode"
 license = "MIT"
 
-[lib]
-name = "pseudo"
-path = "src/lib.rs"
+[workspace.dependencies]
+pseudo-core = { path = "crates/pseudo-core" }
+pseudo-compiler = { path = "crates/pseudo-compiler" }
+pseudo-vm = { path = "crates/pseudo-vm" }
 
-[[bin]]
-name = "pseudo"
-path = "src/main.rs"
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
-[dependencies]
+[workspace.lints.clippy]
+all = "warn"
+
+# Line tables are enough for backtraces and keep debug builds and links fast.
+[profile.dev]
+debug = "line-tables-only"
+
+# `cargo test` reuses the dev profile, so tests share the dev artifacts.
+[profile.test]
+inherits = "dev"
 
 [profile.release]
 lto = "thin"

@@ -16,8 +16,11 @@
 
 mod decl;
 mod expr;
+pub mod lexer;
 mod stmt;
 mod types;
+
+use pseudo_core::{builtins, bytecode, diag, source, value};
 
 use crate::builtins::Builtin;
 use crate::bytecode::{

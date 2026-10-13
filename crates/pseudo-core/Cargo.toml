@@ -1,0 +1,11 @@
+[package]
+name = "pseudo-core"
+description = "Source spans, diagnostics, values and bytecode shared by the pseudocode compiler and VM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

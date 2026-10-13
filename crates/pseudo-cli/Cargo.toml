@@ -1,0 +1,18 @@
+[package]
+name = "pseudo"
+description = "Command-line compiler and runner for Cambridge-style pseudocode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pseudo"
+path = "src/main.rs"
+
+[dependencies]
+pseudo-core.workspace = true
+pseudo-compiler.workspace = true
+pseudo-vm.workspace = true
+
+[lints]
+workspace = true

@@ -80,7 +80,7 @@ fn expect_runtime_error(name: &str, src: &str, code: &str, needles: &[&str]) {
 
 #[test]
 fn examples_run() {
-    let root = env!("CARGO_MANIFEST_DIR");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let basics = std::fs::read_to_string(format!("{root}/examples/basics.pseudo")).unwrap();
     expect_output(
         "basics",

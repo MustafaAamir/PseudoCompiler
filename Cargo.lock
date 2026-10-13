@@ -5,3 +5,26 @@ version = 4
 [[package]]
 name = "pseudo"
 version = "0.1.0"
+dependencies = [
+ "pseudo-compiler",
+ "pseudo-core",
+ "pseudo-vm",
+]
+
+[[package]]
+name = "pseudo-compiler"
+version = "0.1.0"
+dependencies = [
+ "pseudo-core",
+]
+
+[[package]]
+name = "pseudo-core"
+version = "0.1.0"
+
+[[package]]
+name = "pseudo-vm"
+version = "0.1.0"
+dependencies = [
+ "pseudo-core",
+]

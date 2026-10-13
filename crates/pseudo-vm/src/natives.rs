@@ -1,9 +1,9 @@
 //! Implementations of the built-in library routines.
 
 use super::{Fault, Vm, parse_as};
-use crate::builtins::Builtin;
 use crate::bytecode::Conv;
 use crate::value::{Value, civil_from_days, days_from_civil};
+use pseudo_core::builtins::Builtin;
 use std::rc::Rc;
 
 fn text(v: &Value) -> Rc<str> {
