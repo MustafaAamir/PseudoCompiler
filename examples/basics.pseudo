@@ -1,0 +1,66 @@
+// Basic features tour
+CONSTANT Max = 10
+DECLARE Numbers : ARRAY[1:Max] OF INTEGER
+DECLARE Total : INTEGER
+DECLARE Avg : REAL
+DECLARE Name : STRING
+
+Total ← 0
+FOR I ← 1 TO Max
+    Numbers[I] ← I * I
+    Total ← Total + Numbers[I]
+NEXT I
+Avg ← Total / Max
+OUTPUT "Sum of squares: ", Total
+OUTPUT "Average: ", Avg
+
+FUNCTION Factorial(N : INTEGER) RETURNS INTEGER
+    IF N <= 1 THEN
+        RETURN 1
+    ELSE
+        RETURN N * Factorial(N - 1)
+    ENDIF
+ENDFUNCTION
+
+PROCEDURE Swap(BYREF A : INTEGER, BYREF B : INTEGER)
+    DECLARE T : INTEGER
+    T ← A
+    A ← B
+    B ← T
+ENDPROCEDURE
+
+DECLARE X, Y : INTEGER
+X ← 1
+Y ← 2
+CALL Swap(X, Y)
+OUTPUT "After swap: X=", X, " Y=", Y
+OUTPUT "10! = ", Factorial(10)
+
+Name ← "pseudocode"
+OUTPUT UCASE(Name), " has ", LENGTH(Name), " letters; middle: ", MID(Name, 3, 4)
+
+DECLARE Grade : CHAR
+Grade ← 'B'
+CASE OF Grade
+    'A' : OUTPUT "Excellent"
+    'B' : OUTPUT "Good"
+          OUTPUT "(keep going)"
+    'C' TO 'E' : OUTPUT "Pass"
+    OTHERWISE : OUTPUT "Unknown"
+ENDCASE
+
+DECLARE Count : INTEGER
+Count ← 0
+REPEAT
+    Count ← Count + 1
+UNTIL Count >= 3
+WHILE Count > 0 DO
+    Count ← Count - 1
+    IF Count = 1 THEN
+        OUTPUT "one left"
+    ELSE IF Count = 0 THEN
+        OUTPUT "done"
+    ELSE
+        OUTPUT "counting"
+    ENDIF
+ENDWHILE

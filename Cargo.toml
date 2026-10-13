@@ -1,0 +1,21 @@
+[package]
+name = "pseudo"
+version = "0.1.0"
+edition = "2024"
+description = "A single-pass compiler and Smalltalk-style bytecode VM for Cambridge-style pseudocode"
+license = "MIT"
+
+[lib]
+name = "pseudo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pseudo"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

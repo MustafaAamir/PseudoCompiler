@@ -1,0 +1,46 @@
+// Micro-benchmark: recursion, loops, arrays and message sends.
+FUNCTION Fib(N : INTEGER) RETURNS INTEGER
+    IF N < 2 THEN
+        RETURN N
+    ENDIF
+    RETURN Fib(N - 1) + Fib(N - 2)
+ENDFUNCTION
+
+CLASS Counter
+    PRIVATE Count : INTEGER
+    PUBLIC PROCEDURE NEW()
+        Count ← 0
+    ENDPROCEDURE
+    PUBLIC PROCEDURE Tick()
+        Count ← Count + 1
+    ENDPROCEDURE
+    PUBLIC FUNCTION Value() RETURNS INTEGER
+        RETURN Count
+    ENDFUNCTION
+ENDCLASS
+
+DECLARE Sieve : ARRAY[1:200000] OF BOOLEAN
+DECLARE Primes : INTEGER
+DECLARE C : Counter
+
+OUTPUT "Fib(27) = ", Fib(27)
+
+FOR I ← 1 TO 200000
+    Sieve[I] ← TRUE
+NEXT I
+Primes ← 0
+FOR I ← 2 TO 200000
+    IF Sieve[I] THEN
+        Primes ← Primes + 1
+        FOR J ← I * 2 TO 200000 STEP I
+            Sieve[J] ← FALSE
+        NEXT J
+    ENDIF
+NEXT I
+OUTPUT "Primes below 200000: ", Primes
+
+C ← NEW Counter()
+FOR K ← 1 TO 1000000
+    C.Tick()
+NEXT K
+OUTPUT "Sends: ", C.Value()
