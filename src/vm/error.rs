@@ -84,28 +84,16 @@ pub struct RuntimeError {
 impl RuntimeError {
     pub fn to_diagnostic(&self) -> Diagnostic {
         let f = &self.fault;
-        let mut d = Diagnostic::error(f.code, format!("run-time error: {}", f.message))
-            .primary(self.span, &f.label);
+        let mut d = Diagnostic::error(f.code, format!("run-time error: {}", f.message)).primary(self.span, &f.label);
         for (s, m) in &f.secondary {
             d = d.secondary(*s, m);
         }
         if let Some(fr) = self.backtrace.first() {
-            d = d.note(format!(
-                "in {} (call depth {})",
-                fr.name,
-                self.backtrace.len()
-            ));
+            d = d.note(format!("in {} (call depth {})", fr.name, self.backtrace.len()));
         }
         if !self.locals.is_empty() {
-            let vals: Vec<String> = self
-                .locals
-                .iter()
-                .map(|(n, v)| format!("{n} = {v}"))
-                .collect();
-            d = d.note(format!(
-                "variables at the time of the error:\n  {}",
-                vals.join("\n  ")
-            ));
+            let vals: Vec<String> = self.locals.iter().map(|(n, v)| format!("{n} = {v}")).collect();
+            d = d.note(format!("variables at the time of the error:\n  {}", vals.join("\n  ")));
         }
         for n in &f.notes {
             d = d.note(n);
@@ -123,11 +111,7 @@ impl RuntimeError {
             }
         }
         for (fr, n) in runs.iter().take(SHOWN) {
-            let times = if *n > 1 {
-                format!(" ({n} times, recursively)")
-            } else {
-                String::new()
-            };
+            let times = if *n > 1 { format!(" ({n} times, recursively)") } else { String::new() };
             d = d.note_at(fr.span, format!("called from {}{times}", fr.name));
         }
         if runs.len() > SHOWN {

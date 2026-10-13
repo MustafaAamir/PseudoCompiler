@@ -21,56 +21,32 @@ pub struct FileTable {
 }
 
 fn not_open(name: &str, op: &str) -> Fault {
-    Fault::new(
-        "R0005",
-        format!("{op}: file {name:?} is not open"),
-        "file not open",
-    )
-    .help(format!("open it first with `OPENFILE \"{name}\" FOR ...`"))
+    Fault::new("R0005", format!("{op}: file {name:?} is not open"), "file not open")
+        .help(format!("open it first with `OPENFILE \"{name}\" FOR ...`"))
 }
 
 fn wrong_mode(name: &str, op: &str, needed: &str) -> Fault {
-    Fault::new(
-        "R0005",
-        format!("{op}: file {name:?} was not opened FOR {needed}"),
-        "wrong file mode",
-    )
+    Fault::new("R0005", format!("{op}: file {name:?} was not opened FOR {needed}"), "wrong file mode")
 }
 
 impl FileTable {
     pub fn open(&mut self, name: &str, mode: FileMode) -> Result<(), Fault> {
         if self.open.contains_key(name) {
-            return Err(Fault::new(
-                "R0005",
-                format!("file {name:?} is already open"),
-                "opened twice",
-            )
-            .help("CLOSEFILE it before opening it again"));
+            return Err(Fault::new("R0005", format!("file {name:?} is already open"), "opened twice")
+                .help("CLOSEFILE it before opening it again"));
         }
-        let io = |e: std::io::Error| {
-            Fault::new(
-                "R0005",
-                format!("cannot open file {name:?}: {e}"),
-                "OPENFILE failed",
-            )
-        };
+        let io = |e: std::io::Error| Fault::new("R0005", format!("cannot open file {name:?}: {e}"), "OPENFILE failed");
         let handle = match mode {
             FileMode::Read => {
                 let text = fs::read_to_string(name).map_err(io)?;
                 Handle::Read(text.lines().map(str::to_string).collect())
             }
             FileMode::Write => Handle::Write(BufWriter::new(fs::File::create(name).map_err(io)?)),
-            FileMode::Append => Handle::Write(BufWriter::new(
-                fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(name)
-                    .map_err(io)?,
-            )),
+            FileMode::Append => {
+                Handle::Write(BufWriter::new(fs::OpenOptions::new().append(true).create(true).open(name).map_err(io)?))
+            }
             FileMode::Random => {
-                let records = fs::read_to_string(name)
-                    .map(|t| t.lines().map(decode).collect())
-                    .unwrap_or_default();
+                let records = fs::read_to_string(name).map(|t| t.lines().map(decode).collect()).unwrap_or_default();
                 Handle::Random { records, pos: 1 }
             }
         };
@@ -81,12 +57,8 @@ impl FileTable {
     pub fn read_line(&mut self, name: &str) -> Result<String, Fault> {
         match self.open.get_mut(name) {
             Some(Handle::Read(lines)) => lines.pop_front().ok_or_else(|| {
-                Fault::new(
-                    "R0005",
-                    format!("READFILE: no more lines in {name:?}"),
-                    "read past the end of the file",
-                )
-                .help(format!("guard the loop with `WHILE NOT EOF(\"{name}\")`"))
+                Fault::new("R0005", format!("READFILE: no more lines in {name:?}"), "read past the end of the file")
+                    .help(format!("guard the loop with `WHILE NOT EOF(\"{name}\")`"))
             }),
             Some(_) => Err(wrong_mode(name, "READFILE", "READ")),
             None => Err(not_open(name, "READFILE")),
@@ -104,13 +76,8 @@ impl FileTable {
 
     pub fn write_line(&mut self, name: &str, text: &str) -> Result<(), Fault> {
         match self.open.get_mut(name) {
-            Some(Handle::Write(w)) => writeln!(w, "{text}").map_err(|e| {
-                Fault::new(
-                    "R0005",
-                    format!("WRITEFILE to {name:?} failed: {e}"),
-                    "I/O error",
-                )
-            }),
+            Some(Handle::Write(w)) => writeln!(w, "{text}")
+                .map_err(|e| Fault::new("R0005", format!("WRITEFILE to {name:?} failed: {e}"), "I/O error")),
             Some(_) => Err(wrong_mode(name, "WRITEFILE", "WRITE or APPEND")),
             None => Err(not_open(name, "WRITEFILE")),
         }
@@ -122,11 +89,9 @@ impl FileTable {
                 *pos = addr as usize;
                 Ok(())
             }
-            Some(Handle::Random { .. }) => Err(Fault::new(
-                "R0005",
-                format!("SEEK: invalid record address {addr}"),
-                "addresses start at 1",
-            )),
+            Some(Handle::Random { .. }) => {
+                Err(Fault::new("R0005", format!("SEEK: invalid record address {addr}"), "addresses start at 1"))
+            }
             Some(_) => Err(wrong_mode(name, "SEEK", "RANDOM")),
             None => Err(not_open(name, "SEEK")),
         }
@@ -169,13 +134,7 @@ impl FileTable {
     }
 
     fn flush(name: &str, h: Handle) -> Result<(), Fault> {
-        let io = |e: std::io::Error| {
-            Fault::new(
-                "R0005",
-                format!("closing {name:?} failed: {e}"),
-                "I/O error",
-            )
-        };
+        let io = |e: std::io::Error| Fault::new("R0005", format!("closing {name:?} failed: {e}"), "I/O error");
         match h {
             Handle::Write(mut w) => w.flush().map_err(io),
             Handle::Random { records, .. } => {
@@ -229,10 +188,7 @@ fn decode(line: &str) -> Value {
         let mut parts = rest.split('\t');
         let shape = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         let fields = parts.map(decode_scalar).collect();
-        return Value::Record(Rc::new(Obj {
-            shape,
-            fields: RefCell::new(fields),
-        }));
+        return Value::Record(Rc::new(Obj { shape, fields: RefCell::new(fields) }));
     }
     decode_scalar(line)
 }
@@ -248,10 +204,7 @@ fn decode_scalar(s: &str) -> Value {
         "d" => body.parse().map_or(Value::Uninit, Value::Date),
         "e" => {
             let mut it = body.split(':').map(|x| x.parse().unwrap_or(0));
-            Value::Enum {
-                ty: it.next().unwrap_or(0),
-                ord: it.next().unwrap_or(0),
-            }
+            Value::Enum { ty: it.next().unwrap_or(0), ord: it.next().unwrap_or(0) }
         }
         _ => Value::Uninit,
     }

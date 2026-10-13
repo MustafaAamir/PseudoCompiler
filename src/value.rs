@@ -153,11 +153,7 @@ pub fn format_date(days: i32) -> String {
 }
 
 pub fn format_real(r: f64) -> String {
-    if r.is_finite() && r.fract() == 0.0 && r.abs() < 1e15 {
-        format!("{r:.1}")
-    } else {
-        format!("{r}")
-    }
+    if r.is_finite() && r.fract() == 0.0 && r.abs() < 1e15 { format!("{r:.1}") } else { format!("{r}") }
 }
 
 #[cfg(test)]

@@ -90,9 +90,6 @@ pub enum Op {
     StoreIndex(u8),
     IndexRef(u8),
 
-    AddInt,
-    SubInt,
-    MulInt,
     Add,
     Sub,
     Mul,
@@ -302,18 +299,6 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn is_subclass(&self, mut class: u32, ancestor: u32) -> bool {
-        loop {
-            if class == ancestor {
-                return true;
-            }
-            match self.shapes[class as usize].parent {
-                Some(p) => class = p,
-                None => return false,
-            }
-        }
-    }
-
     pub fn describe_const(&self, v: &Value) -> String {
         match v {
             Value::Str(s) => format!("{s:?}"),
@@ -327,14 +312,10 @@ impl Program {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Disassembler
-    // -----------------------------------------------------------------------
-
     pub fn disassemble(&self, src: &Source) -> String {
         let mut out = String::new();
-        let _ = writeln!(out, "; program `{}`", src.name);
-        let _ = writeln!(
+        outln!(out, "; program `{}`", src.name);
+        outln!(
             out,
             "; {} functions, {} globals, {} shapes, {} selectors, {} inline-cache sites\n",
             self.functions.len(),
@@ -344,37 +325,26 @@ impl Program {
             self.num_sites
         );
         if !self.globals.is_empty() {
-            let _ = writeln!(out, "globals:");
+            outln!(out, "globals:");
             for (i, g) in self.globals.iter().enumerate() {
                 let (l, c) = src.line_col(g.decl.start);
-                let _ = writeln!(
-                    out,
-                    "  g{i:<4} {:<20} : {:<24} ; declared {l}:{c}",
-                    g.name, g.ty
-                );
+                outln!(out, "  g{i:<4} {:<20} : {:<24} ; declared {l}:{c}", g.name, g.ty);
             }
             out.push('\n');
         }
         for (i, s) in self.shapes.iter().enumerate() {
             let kind = if s.is_class { "class" } else { "record" };
-            let parent = s
-                .parent
-                .map(|p| format!(" inherits {}", self.shapes[p as usize].name))
-                .unwrap_or_default();
-            let _ = writeln!(out, "shape #{i} {kind} {}{parent}", s.name);
+            let parent = s.parent.map(|p| format!(" inherits {}", self.shapes[p as usize].name)).unwrap_or_default();
+            outln!(out, "shape #{i} {kind} {}{parent}", s.name);
             for (slot, f) in s.fields.iter().enumerate() {
                 let vis = if f.private { "PRIVATE" } else { "PUBLIC " };
-                let _ = writeln!(out, "  [{slot}] {vis} {} : {}", f.name, f.ty);
+                outln!(out, "  [{slot}] {vis} {} : {}", f.name, f.ty);
             }
             let mut methods: Vec<_> = s.methods.iter().collect();
             methods.sort_by_key(|(sym, _)| self.symbols[**sym as usize].clone());
             for (sym, m) in methods {
                 let vis = if m.private { "PRIVATE" } else { "PUBLIC " };
-                let _ = writeln!(
-                    out,
-                    "  #{} {vis} -> fn{}",
-                    self.symbols[*sym as usize], m.func
-                );
+                outln!(out, "  #{} {vis} -> fn{}", self.symbols[*sym as usize], m.func);
             }
             out.push('\n');
         }
@@ -387,126 +357,77 @@ impl Program {
 
     fn disassemble_proto(&self, out: &mut String, src: &Source, p: &Proto, index: Option<usize>) {
         let id = index.map_or("main".to_string(), |i| format!("fn{i}"));
-        let _ = writeln!(
-            out,
-            "{id}: {}  ; {} slots, arity {}",
-            p.signature, p.num_slots, p.arity
-        );
+        outln!(out, "{id}: {}  ; {} slots, arity {}", p.signature, p.num_slots, p.arity);
         for l in &p.locals {
             let (line, col) = src.line_col(l.decl.start);
             let byref = if l.byref { " BYREF" } else { "" };
-            let _ = writeln!(
-                out,
-                "  ; local %{} {}{byref} : {}  (declared {line}:{col})",
-                l.slot, l.name, l.ty
-            );
+            outln!(out, "  ; local %{} {}{byref} : {}  (declared {line}:{col})", l.slot, l.name, l.ty);
         }
         let mut last_line = usize::MAX;
         for (pc, op) in p.code.iter().enumerate() {
             let span = p.spans[pc];
             let (line, col) = src.line_col(span.start);
             if line != last_line && span != Span::DUMMY {
-                let _ = writeln!(out, "  ;; {line:>4} | {}", src.line_text(line - 1).trim());
+                outln!(out, "  ;; {line:>4} | {}", src.line_text(line - 1).trim());
                 last_line = line;
             }
-            let _ = writeln!(
-                out,
-                "  {pc:05}  {:<44} ; {line}:{col}",
-                self.describe_op(p, op)
-            );
+            outln!(out, "  {pc:05}  {:<44} ; {line}:{col}", self.describe_op(p, op));
         }
         out.push('\n');
     }
 
     fn var_name(&self, p: &Proto, v: VarLoc) -> String {
         match v {
-            VarLoc::Local(s) => p
-                .local_name(s)
-                .map_or(format!("%{s}"), |l| format!("%{s}({})", l.name)),
+            VarLoc::Local(s) => p.local_name(s).map_or(format!("%{s}"), |l| format!("%{s}({})", l.name)),
             VarLoc::Global(g) => format!("g{g}({})", self.globals[g as usize].name),
         }
     }
 
     pub fn describe_op(&self, p: &Proto, op: &Op) -> String {
-        let sym = |s: &u32| self.symbols[*s as usize].as_str();
-        let func = |f: &u32| {
-            self.functions
-                .get(*f as usize)
-                .map_or("?", |p| p.name.as_str())
-        };
-        match op {
-            Op::Const(i) => format!("CONST {}", self.describe_const(&p.consts[*i as usize])),
-            Op::PushInt(v) => format!("PUSH_INT {v}"),
-            Op::Init(i) => format!("INIT {}", self.describe_init(*i)),
-            Op::LoadLocal(s) => format!("LOAD_LOCAL {}", self.var_name(p, VarLoc::Local(*s))),
-            Op::StoreLocal(s) => format!("STORE_LOCAL {}", self.var_name(p, VarLoc::Local(*s))),
-            Op::StoreLocalDeref(s) => {
-                format!("STORE_LOCAL_DEREF {}", self.var_name(p, VarLoc::Local(*s)))
-            }
-            Op::RefLocal(s) => format!("REF_LOCAL {}", self.var_name(p, VarLoc::Local(*s))),
-            Op::LoadGlobal(g) => format!("LOAD_GLOBAL {}", self.var_name(p, VarLoc::Global(*g))),
-            Op::StoreGlobal(g) => format!("STORE_GLOBAL {}", self.var_name(p, VarLoc::Global(*g))),
-            Op::RefGlobal(g) => format!("REF_GLOBAL {}", self.var_name(p, VarLoc::Global(*g))),
-            Op::GetFieldNamed { sym: s, site } => format!("GET_FIELD_NAMED .{} @ic{site}", sym(s)),
-            Op::SetFieldNamed { sym: s, site } => format!("SET_FIELD_NAMED .{} @ic{site}", sym(s)),
-            Op::FieldRefNamed { sym: s, site } => format!("FIELD_REF_NAMED .{} @ic{site}", sym(s)),
-            Op::Coerce { slot, to } => format!(
-                "COERCE {} -> {to:?}",
-                self.var_name(p, VarLoc::Local(*slot))
-            ),
-            Op::ForCheck {
-                var,
-                end,
-                step,
-                exit,
-            } => format!(
-                "FOR_CHECK {} to {} step {} else ->{exit}",
-                self.var_name(p, *var),
-                self.var_name(p, *end),
-                self.var_name(p, *step)
-            ),
-            Op::ForStep { var, step, back } => {
-                format!(
-                    "FOR_STEP {} += {} ->{back}",
-                    self.var_name(p, *var),
-                    self.var_name(p, *step)
-                )
-            }
-            Op::Jump(t) => format!("JUMP ->{t}"),
-            Op::JumpIfFalse(t) => format!("JUMP_IF_FALSE ->{t}"),
-            Op::JumpIfFalseOrPop(t) => format!("JUMP_IF_FALSE_OR_POP ->{t}"),
-            Op::JumpIfTrueOrPop(t) => format!("JUMP_IF_TRUE_OR_POP ->{t}"),
-            Op::Call { func: f, argc } => format!("CALL fn{f}({}) argc={argc}", func(f)),
-            Op::CallBuiltin { builtin, argc } => {
-                format!("CALL_BUILTIN {} argc={argc}", builtin.name())
-            }
-            Op::Send { sym: s, argc, site } => format!("SEND #{} argc={argc} @ic{site}", sym(s)),
-            Op::SendSelf { sym: s, argc, site } => {
-                format!("SEND_SELF #{} argc={argc} @ic{site}", sym(s))
-            }
-            Op::Construct { class, ctor, argc } => {
-                let ctor = if *ctor == u32::MAX {
-                    "none".to_string()
-                } else {
-                    format!("fn{ctor}")
-                };
-                format!(
-                    "CONSTRUCT {} ctor={ctor} argc={argc}",
-                    self.shapes[*class as usize].name
-                )
+        let debug = format!("{op:?}");
+        let name_end = debug.find(|c: char| !c.is_alphanumeric()).unwrap_or(debug.len());
+        let mnemonic = screaming_snake(&debug[..name_end]);
+        let local = |s: u16| self.var_name(p, VarLoc::Local(s));
+        let sym = |s: u32| &self.symbols[s as usize];
+        let operands = match *op {
+            Op::Const(i) => self.describe_const(&p.consts[i as usize]),
+            Op::Init(i) => self.describe_init(i),
+            Op::LoadLocal(s) | Op::StoreLocal(s) | Op::StoreLocalDeref(s) | Op::RefLocal(s) => local(s),
+            Op::LoadGlobal(g) | Op::StoreGlobal(g) | Op::RefGlobal(g) => self.var_name(p, VarLoc::Global(g)),
+            Op::GetFieldNamed { sym: s, site }
+            | Op::SetFieldNamed { sym: s, site }
+            | Op::FieldRefNamed { sym: s, site } => {
+                format!(".{} @ic{site}", sym(s))
             }
             Op::GetField(s)
             | Op::SetField(s)
             | Op::FieldRef(s)
             | Op::LoadSelfField(s)
             | Op::StoreSelfField(s)
-            | Op::RefSelfField(s) => {
-                let name = format!("{op:?}");
-                let name = name.split('(').next().unwrap();
-                format!("{} [{s}]", screaming(name))
+            | Op::RefSelfField(s) => format!("[{s}]"),
+            Op::Coerce { slot, to } => format!("{} -> {to:?}", local(slot)),
+            Op::ForCheck { var, end, step, exit } => format!(
+                "{} to {} step {} else ->{exit}",
+                self.var_name(p, var),
+                self.var_name(p, end),
+                self.var_name(p, step)
+            ),
+            Op::ForStep { var, step, back } => {
+                format!("{} += {} ->{back}", self.var_name(p, var), self.var_name(p, step))
             }
-            other => screaming(&format!("{other:?}")),
-        }
+            Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfFalseOrPop(t) | Op::JumpIfTrueOrPop(t) => format!("->{t}"),
+            Op::Call { func, argc } => format!("fn{func}({}) argc={argc}", self.functions[func as usize].name),
+            Op::CallBuiltin { builtin, argc } => format!("{} argc={argc}", builtin.name()),
+            Op::Send { sym: s, argc, site } | Op::SendSelf { sym: s, argc, site } => {
+                format!("#{} argc={argc} @ic{site}", sym(s))
+            }
+            Op::Construct { class, ctor, argc } => {
+                let ctor = if ctor == u32::MAX { "none".to_string() } else { format!("fn{ctor}") };
+                format!("{} ctor={ctor} argc={argc}", self.shapes[class as usize].name)
+            }
+            _ => debug[name_end..].trim_matches(['(', ')', ' ']).to_string(),
+        };
+        if operands.is_empty() { mnemonic } else { format!("{mnemonic} {operands}") }
     }
 
     fn describe_init(&self, i: u32) -> String {
@@ -521,19 +442,13 @@ impl Program {
     }
 }
 
-/// `GetField` -> `GET_FIELD`, `Output(2)` -> `OUTPUT(2)`.
-fn screaming(s: &str) -> String {
+/// `GetField` -> `GET_FIELD`
+fn screaming_snake(name: &str) -> String {
     let mut out = String::new();
-    let mut prev_lower = false;
-    for ch in s.chars() {
-        if ch == '(' || ch == ' ' || ch == '{' {
-            out.push_str(&s[s.find(ch).unwrap()..]);
-            return out;
-        }
-        if ch.is_uppercase() && prev_lower {
+    for (i, ch) in name.chars().enumerate() {
+        if i > 0 && ch.is_uppercase() {
             out.push('_');
         }
-        prev_lower = ch.is_lowercase();
         out.push(ch.to_ascii_uppercase());
     }
     out

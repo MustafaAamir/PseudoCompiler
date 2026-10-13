@@ -24,7 +24,7 @@ pub enum ChildKind {
     Help,
 }
 
-/// A trailing `note:` / `help:`. With a span it gets its own snippet; with a
+/// A trailing `note:`/`help:`. With a span it gets its own snippet; with a
 /// replacement it is rendered as a suggested edit.
 #[derive(Clone, Debug)]
 pub struct Child {
@@ -37,7 +37,7 @@ pub struct Child {
 #[derive(Clone, Debug)]
 pub struct Diagnostic {
     pub severity: Severity,
-    pub code: Option<&'static str>,
+    pub code: &'static str,
     pub message: String,
     pub labels: Vec<Label>,
     pub children: Vec<Child>,
@@ -53,77 +53,48 @@ impl Diagnostic {
     }
 
     fn new(severity: Severity, code: &'static str, message: impl Into<String>) -> Self {
-        Diagnostic {
-            severity,
-            code: Some(code),
-            message: message.into(),
-            labels: Vec::new(),
-            children: Vec::new(),
-        }
+        Diagnostic { severity, code, message: message.into(), labels: Vec::new(), children: Vec::new() }
     }
 
-    pub fn primary(mut self, span: Span, message: impl Into<String>) -> Self {
-        self.labels.push(Label {
-            span,
-            message: message.into(),
-            primary: true,
-        });
+    fn label(mut self, span: Span, message: impl Into<String>, primary: bool) -> Self {
+        self.labels.push(Label { span, message: message.into(), primary });
         self
     }
 
-    pub fn secondary(mut self, span: Span, message: impl Into<String>) -> Self {
-        self.labels.push(Label {
-            span,
-            message: message.into(),
-            primary: false,
-        });
+    fn child(
+        mut self,
+        kind: ChildKind,
+        span: Option<Span>,
+        replacement: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        self.children.push(Child { kind, message: message.into(), span, replacement });
         self
     }
 
-    pub fn note(mut self, message: impl Into<String>) -> Self {
-        self.children.push(Child {
-            kind: ChildKind::Note,
-            message: message.into(),
-            span: None,
-            replacement: None,
-        });
-        self
+    pub fn primary(self, span: Span, message: impl Into<String>) -> Self {
+        self.label(span, message, true)
     }
 
-    pub fn note_at(mut self, span: Span, message: impl Into<String>) -> Self {
-        self.children.push(Child {
-            kind: ChildKind::Note,
-            message: message.into(),
-            span: Some(span),
-            replacement: None,
-        });
-        self
+    pub fn secondary(self, span: Span, message: impl Into<String>) -> Self {
+        self.label(span, message, false)
     }
 
-    pub fn help(mut self, message: impl Into<String>) -> Self {
-        self.children.push(Child {
-            kind: ChildKind::Help,
-            message: message.into(),
-            span: None,
-            replacement: None,
-        });
-        self
+    pub fn note(self, message: impl Into<String>) -> Self {
+        self.child(ChildKind::Note, None, None, message)
+    }
+
+    pub fn note_at(self, span: Span, message: impl Into<String>) -> Self {
+        self.child(ChildKind::Note, Some(span), None, message)
+    }
+
+    pub fn help(self, message: impl Into<String>) -> Self {
+        self.child(ChildKind::Help, None, None, message)
     }
 
     /// Suggest replacing `span` with `replacement`.
-    pub fn suggest(
-        mut self,
-        span: Span,
-        replacement: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        self.children.push(Child {
-            kind: ChildKind::Help,
-            message: message.into(),
-            span: Some(span),
-            replacement: Some(replacement.into()),
-        });
-        self
+    pub fn suggest(self, span: Span, replacement: impl Into<String>, message: impl Into<String>) -> Self {
+        self.child(ChildKind::Help, Some(span), Some(replacement.into()), message)
     }
 
     pub fn is_error(&self) -> bool {
@@ -135,44 +106,34 @@ impl Diagnostic {
     }
 }
 
-/// An ordered collection of diagnostics produced by one compilation.
+/// The diagnostics produced by one compilation.
 #[derive(Default)]
-pub struct Diagnostics {
-    list: Vec<Diagnostic>,
-}
+pub struct Diagnostics(Vec<Diagnostic>);
 
 impl Diagnostics {
     pub fn push(&mut self, d: Diagnostic) {
-        self.list.push(d);
+        self.0.push(d);
     }
 
     pub fn error_count(&self) -> usize {
-        self.list.iter().filter(|d| d.is_error()).count()
+        self.0.iter().filter(|d| d.is_error()).count()
     }
 
     pub fn warning_count(&self) -> usize {
-        self.list.len() - self.error_count()
+        self.0.len() - self.error_count()
     }
 
     pub fn has_errors(&self) -> bool {
         self.error_count() > 0
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
-        self.list.iter()
-    }
-
-    /// Diagnostics in source order (errors before warnings at the same spot).
+    /// Source order; errors before warnings at the same position.
     pub fn sorted(&self) -> Vec<&Diagnostic> {
-        let mut v: Vec<&Diagnostic> = self.list.iter().collect();
+        let mut v: Vec<&Diagnostic> = self.0.iter().collect();
         v.sort_by_key(|d| (d.primary_span().map_or(u32::MAX, |s| s.start), d.severity));
         v
     }
 }
-
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Style {
@@ -215,96 +176,61 @@ impl<'a> Renderer<'a> {
 
     fn paint(&self, text: &str, style: Style) -> String {
         if self.color && style != Style::Plain && !text.is_empty() {
-            format!("{}{}\x1b[0m", style.ansi(), text)
+            format!("{}{text}\x1b[0m", style.ansi())
         } else {
             text.to_string()
         }
     }
 
-    fn severity_style(sev: Severity) -> Style {
-        match sev {
-            Severity::Error => Style::Error,
-            Severity::Warning => Style::Warning,
-        }
+    /// `kind: message` heading, e.g. `error[E0300]: mismatched types`.
+    fn heading(&self, out: &mut String, kind: &str, style: Style, message: &str) {
+        outln!(out, "{}{}", self.paint(kind, style), self.paint(&format!(": {message}"), Style::Bold));
+    }
+
+    /// The gutter: blank (`   |`) or numbered (` 12 |`).
+    fn bar(&self, line: Option<usize>, gutter: usize) -> String {
+        let num = line.map_or(String::new(), |l| (l + 1).to_string());
+        self.paint(&format!("{num:>gutter$} |"), Style::Gutter)
     }
 
     pub fn render(&self, d: &Diagnostic) -> String {
         let mut out = String::new();
-        let sev_style = Self::severity_style(d.severity);
-        let word = match d.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
+        let (word, sev_style) = match d.severity {
+            Severity::Error => ("error", Style::Error),
+            Severity::Warning => ("warning", Style::Warning),
         };
-        let head = match d.code {
-            Some(c) => format!("{word}[{c}]"),
-            None => word.to_string(),
-        };
-        let _ = writeln!(
-            out,
-            "{}{}",
-            self.paint(&head, sev_style),
-            self.paint(&format!(": {}", d.message), Style::Bold)
-        );
+        self.heading(&mut out, &format!("{word}[{}]", d.code), sev_style, &d.message);
 
         let gutter = self.gutter_width(d);
-        if let Some(primary) = d
-            .primary_span()
-            .or_else(|| d.labels.first().map(|l| l.span))
-        {
-            self.location_line(&mut out, primary, gutter);
+        if let Some(primary) = d.primary_span().or_else(|| d.labels.first().map(|l| l.span)) {
+            self.location(&mut out, primary, gutter);
             let labels: Vec<(Span, &str, Style)> = d
                 .labels
                 .iter()
-                .map(|l| {
-                    let st = if l.primary {
-                        sev_style
-                    } else {
-                        Style::Secondary
-                    };
-                    (l.span, l.message.as_str(), st)
-                })
+                .map(|l| (l.span, l.message.as_str(), if l.primary { sev_style } else { Style::Secondary }))
                 .collect();
             self.snippet(&mut out, &labels, gutter);
         }
 
         // Plain notes/helps go in the `= note:` trailer; spanned ones get snippets.
-        let (plain, spanned): (Vec<&Child>, Vec<&Child>) =
-            d.children.iter().partition(|c| c.span.is_none());
+        let (plain, spanned): (Vec<&Child>, Vec<&Child>) = d.children.iter().partition(|c| c.span.is_none());
         for c in plain {
             let (kw, st) = Self::child_kind(c.kind);
             let mut lines = c.message.lines();
-            let first = lines.next().unwrap_or("");
-            let _ = writeln!(
-                out,
-                "{} {}: {}",
-                self.paint(&format!("{:>w$} =", "", w = gutter), Style::Gutter),
-                self.paint(kw, st),
-                first
-            );
+            let eq = self.paint(&format!("{:>gutter$} =", ""), Style::Gutter);
+            outln!(out, "{eq} {}: {}", self.paint(kw, st), lines.next().unwrap_or(""));
             for l in lines {
-                let _ = writeln!(
-                    out,
-                    "{:>w$}   {}{}",
-                    "",
-                    " ".repeat(kw.len() + 2),
-                    l,
-                    w = gutter
-                );
+                outln!(out, "{:>gutter$}   {}{l}", "", " ".repeat(kw.len() + 2));
             }
         }
         for c in spanned {
             let (kw, st) = Self::child_kind(c.kind);
             let span = c.span.unwrap();
-            let _ = writeln!(
-                out,
-                "{}{}",
-                self.paint(kw, st),
-                self.paint(&format!(": {}", c.message), Style::Bold)
-            );
+            self.heading(&mut out, kw, st, &c.message);
             match &c.replacement {
                 Some(rep) => self.suggestion(&mut out, span, rep, gutter),
                 None => {
-                    self.location_line(&mut out, span, gutter);
+                    self.location(&mut out, span, gutter);
                     self.snippet(&mut out, &[(span, "", st)], gutter);
                 }
             }
@@ -320,40 +246,23 @@ impl<'a> Renderer<'a> {
     }
 
     fn gutter_width(&self, d: &Diagnostic) -> usize {
-        let max_line = d
-            .labels
-            .iter()
-            .map(|l| l.span)
-            .chain(d.children.iter().filter_map(|c| c.span))
-            .map(|s| self.src.line_index(s.end) + 1)
-            .max()
-            .unwrap_or(1);
+        let spans = d.labels.iter().map(|l| l.span).chain(d.children.iter().filter_map(|c| c.span));
+        let max_line = spans.map(|s| self.src.line_index(s.end) + 1).max().unwrap_or(1);
         max_line.to_string().len()
     }
 
-    fn location_line(&self, out: &mut String, span: Span, gutter: usize) {
+    fn location(&self, out: &mut String, span: Span, gutter: usize) {
         let (line, col) = self.src.line_col(span.start);
-        let _ = writeln!(
-            out,
-            "{}{} {}:{}:{}",
-            " ".repeat(gutter),
-            self.paint("-->", Style::Gutter),
-            self.src.name,
-            line,
-            col
-        );
+        outln!(out, "{}{} {}:{line}:{col}", " ".repeat(gutter), self.paint("-->", Style::Gutter), self.src.name);
     }
 
     /// Display column (tab-expanded, character based) of a byte offset in a line.
     fn display_col(line_text: &str, byte_in_line: usize) -> usize {
-        let mut col = 0;
-        for (i, ch) in line_text.char_indices() {
-            if i >= byte_in_line {
-                break;
-            }
-            col += if ch == '\t' { TAB.len() } else { 1 };
-        }
-        col
+        line_text
+            .char_indices()
+            .take_while(|&(i, _)| i < byte_in_line)
+            .map(|(_, ch)| if ch == '\t' { TAB.len() } else { 1 })
+            .sum()
     }
 
     fn snippet(&self, out: &mut String, labels: &[(Span, &str, Style)], gutter: usize) {
@@ -368,95 +277,63 @@ impl<'a> Renderer<'a> {
             let line = self.src.line_index(span.start);
             let text = self.src.line_text(line);
             let ls = self.src.line_start(line) as usize;
-            let s_byte = span.start as usize - ls;
+            // Multi-line spans are underlined to the end of their first line.
             let end_line = self.src.line_index(span.end.max(span.start + 1) - 1);
-            let e_byte = if end_line == line {
-                span.end as usize - ls
-            } else {
-                text.len()
-            };
-            let start = Self::display_col(text, s_byte);
+            let e_byte = if end_line == line { span.end as usize - ls } else { text.len() };
+            let start = Self::display_col(text, span.start as usize - ls);
             let end = Self::display_col(text, e_byte.min(text.len())).max(start + 1);
-            let end = if e_byte > text.len() {
-                end.max(start + 1)
-            } else {
-                end
-            };
-            let msg_owned: &str = msg;
-            by_line.entry(line).or_default().push(OnLine {
-                start,
-                end,
-                msg: msg_owned,
-                style,
-            });
+            by_line.entry(line).or_default().push(OnLine { start, end, msg, style });
         }
 
-        let bar = self.paint(&format!("{:>w$} |", "", w = gutter), Style::Gutter);
-        let _ = writeln!(out, "{bar}");
+        let bar = self.bar(None, gutter);
+        outln!(out, "{bar}");
         let mut prev: Option<usize> = None;
-        let lines: Vec<usize> = by_line.keys().copied().collect();
-        for &line in &lines {
-            if let Some(p) = prev {
-                if line == p + 2 {
-                    self.source_line(out, p + 1, gutter);
-                } else if line > p + 2 {
-                    let _ = writeln!(out, "{}", self.paint("...", Style::Gutter));
+        for (line, mut ls) in by_line {
+            match prev {
+                Some(p) if line == p + 2 => self.source_line(out, p + 1, gutter),
+                Some(p) if line > p + 2 => {
+                    outln!(out, "{}", self.paint("...", Style::Gutter));
                 }
+                _ => {}
             }
             self.source_line(out, line, gutter);
-            let mut ls = by_line.remove(&line).unwrap();
             ls.sort_by_key(|l| l.start);
 
             // Underline row, carrying the rightmost label's message inline.
             let mut canvas = Canvas::default();
             for l in &ls {
-                let ch = if l.style == Style::Secondary {
-                    '-'
-                } else {
-                    '^'
-                };
+                let ch = if l.style == Style::Secondary { '-' } else { '^' };
                 for c in l.start..l.end {
                     canvas.put(c, ch, l.style);
                 }
             }
             let last = ls.last().unwrap();
-            if !last.msg.is_empty() {
-                let col = ls.iter().map(|l| l.end).max().unwrap() + 1;
-                canvas.text(col, last.msg, last.style);
-            }
-            let _ = writeln!(out, "{bar} {}", canvas.render(self));
+            let col = ls.iter().map(|l| l.end).max().unwrap() + 1;
+            canvas.text(col, last.msg, last.style);
+            outln!(out, "{bar} {}", canvas.render(self));
 
             // Hanging messages for the remaining labels, right to left.
-            let pending: Vec<&OnLine> = ls[..ls.len() - 1]
-                .iter()
-                .filter(|l| !l.msg.is_empty())
-                .collect();
+            let pending: Vec<&OnLine> = ls[..ls.len() - 1].iter().filter(|l| !l.msg.is_empty()).collect();
             for i in (0..pending.len()).rev() {
                 let mut conn = Canvas::default();
                 for l in &pending[..=i] {
                     conn.put(l.start, '|', l.style);
                 }
-                let _ = writeln!(out, "{bar} {}", conn.render(self));
+                outln!(out, "{bar} {}", conn.render(self));
                 let mut msg = Canvas::default();
                 for l in &pending[..i] {
                     msg.put(l.start, '|', l.style);
                 }
                 msg.text(pending[i].start, pending[i].msg, pending[i].style);
-                let _ = writeln!(out, "{bar} {}", msg.render(self));
+                outln!(out, "{bar} {}", msg.render(self));
             }
             prev = Some(line);
         }
-        let _ = writeln!(out, "{bar}");
+        outln!(out, "{bar}");
     }
 
     fn source_line(&self, out: &mut String, line: usize, gutter: usize) {
-        let text = self.src.line_text(line).replace('\t', TAB);
-        let _ = writeln!(
-            out,
-            "{} {}",
-            self.paint(&format!("{:>w$} |", line + 1, w = gutter), Style::Gutter),
-            text
-        );
+        outln!(out, "{} {}", self.bar(Some(line), gutter), self.src.line_text(line).replace('\t', TAB));
     }
 
     fn suggestion(&self, out: &mut String, span: Span, replacement: &str, gutter: usize) {
@@ -465,74 +342,31 @@ impl<'a> Renderer<'a> {
         let ls = self.src.line_start(line) as usize;
         let s = span.start as usize - ls;
         let e = (span.end as usize - ls).min(text.len());
-        let new_line = format!("{}{}{}", &text[..s], replacement, &text[e..]);
-        let start_col = Self::display_col(text, s);
-        let width = replacement.chars().count().max(1);
-        let mark = if span.is_empty() { '+' } else { '~' };
-        let bar = self.paint(&format!("{:>w$} |", "", w = gutter), Style::Gutter);
-        let _ = writeln!(out, "{bar}");
-        let _ = writeln!(
-            out,
-            "{} {}",
-            self.paint(&format!("{:>w$} |", line + 1, w = gutter), Style::Gutter),
-            new_line.replace('\t', TAB)
-        );
-        let marks: String = std::iter::repeat_n(mark, width).collect();
-        let _ = writeln!(
-            out,
-            "{bar} {}{}",
-            " ".repeat(start_col),
-            self.paint(&marks, Style::Help)
-        );
-        let _ = writeln!(out, "{bar}");
+        let new_line = format!("{}{replacement}{}", &text[..s], &text[e..]);
+        let mark = if span.is_empty() { "+" } else { "~" };
+        let marks = mark.repeat(replacement.chars().count().max(1));
+        let bar = self.bar(None, gutter);
+        outln!(out, "{bar}");
+        outln!(out, "{} {}", self.bar(Some(line), gutter), new_line.replace('\t', TAB));
+        outln!(out, "{bar} {}{}", " ".repeat(Self::display_col(text, s)), self.paint(&marks, Style::Help));
+        outln!(out, "{bar}");
     }
 
-    /// The closing `error: aborting ...` summary line.
+    /// The closing `error: could not compile ...` summary.
     pub fn summary(&self, diags: &Diagnostics) -> String {
         let (e, w) = (diags.error_count(), diags.warning_count());
         let plural = |n: usize| if n == 1 { "" } else { "s" };
+        let name = &self.src.name;
         let mut out = String::new();
         if w > 0 {
-            let _ = writeln!(
-                out,
-                "{}{}",
-                self.paint("warning", Style::Warning),
-                self.paint(
-                    &format!(": `{}` generated {w} warning{}", self.src.name, plural(w)),
-                    Style::Bold
-                )
-            );
+            self.heading(&mut out, "warning", Style::Warning, &format!("`{name}` generated {w} warning{}", plural(w)));
         }
         if e > 0 {
-            let _ = writeln!(
-                out,
-                "{}{}",
-                self.paint("error", Style::Error),
-                self.paint(
-                    &format!(
-                        ": could not compile `{}` due to {e} previous error{}",
-                        self.src.name,
-                        plural(e)
-                    ),
-                    Style::Bold
-                )
-            );
-            let codes: std::collections::BTreeSet<&str> = diags
-                .iter()
-                .filter(|d| d.is_error())
-                .filter_map(|d| d.code)
-                .collect();
-            if let Some(first) = codes.iter().next() {
-                let _ = writeln!(
-                    out,
-                    "{}",
-                    self.paint(
-                        &format!(
-                            "For more information about an error, try `pseudo explain {first}`."
-                        ),
-                        Style::Bold
-                    )
-                );
+            let msg = format!("could not compile `{name}` due to {e} previous error{}", plural(e));
+            self.heading(&mut out, "error", Style::Error, &msg);
+            if let Some(first) = diags.sorted().into_iter().find(|d| d.is_error()) {
+                let hint = format!("For more information about an error, try `pseudo explain {}`.", first.code);
+                outln!(out, "{}", self.paint(&hint, Style::Bold));
             }
         }
         out
@@ -576,10 +410,6 @@ impl Canvas {
     }
 }
 
-// ---------------------------------------------------------------------------
-// "Did you mean" helpers
-// ---------------------------------------------------------------------------
-
 /// Optimal string alignment distance (Levenshtein + adjacent transpositions).
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -594,9 +424,7 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=a.len() {
         for j in 1..=b.len() {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i][j] = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
+            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
                 d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
             }
@@ -620,11 +448,7 @@ where
         if c == name {
             continue;
         }
-        let dist = if c.to_lowercase() == lower {
-            0
-        } else {
-            edit_distance(&lower, &c.to_lowercase())
-        };
+        let dist = if c.to_lowercase() == lower { 0 } else { edit_distance(&lower, &c.to_lowercase()) };
         if dist <= limit && best.is_none_or(|(d, _)| dist < d) {
             best = Some((dist, c));
         }
@@ -658,10 +482,7 @@ mod tests {
         let out = Renderer::new(&src, false).render(&d);
         assert!(out.contains("error[E0300]: mismatched types"), "{out}");
         assert!(out.contains("--> t.pseudo:2:6"), "{out}");
-        assert!(
-            out.contains("^^^^ expected `INTEGER`, found `STRING`"),
-            "{out}"
-        );
+        assert!(out.contains("^^^^ expected `INTEGER`, found `STRING`"), "{out}");
         assert!(out.contains("has type `INTEGER`"), "{out}");
     }
 }

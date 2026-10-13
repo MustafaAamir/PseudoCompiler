@@ -7,12 +7,10 @@ use std::fmt;
 
 macro_rules! keywords {
     ($($variant:ident => $text:literal),* $(,)?) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Kw { $($variant),* }
 
         impl Kw {
-            pub const ALL: &'static [Kw] = &[$(Kw::$variant),*];
-
             pub fn as_str(self) -> &'static str {
                 match self { $(Kw::$variant => $text),* }
             }
@@ -49,58 +47,27 @@ keywords! {
     Public => "PUBLIC", Private => "PRIVATE", Super => "SUPER", New => "NEW",
 }
 
+/// Keywords that close a block; used for recovery and mismatch reports.
+const BLOCK_ENDS: &[Kw] = {
+    use Kw::*;
+    &[EndIf, Else, EndCase, Otherwise, EndWhile, Until, Next, EndProcedure, EndFunction, EndClass, EndType]
+};
+
+const STATEMENT_STARTS: &[Kw] = {
+    use Kw::*;
+    &[
+        Declare, Constant, Type, If, Case, While, Repeat, For, Call, Return, Break, Continue, Output, Print, Input,
+        Read, OpenFile, ReadFile, WriteFile, Seek, GetRecord, PutRecord, CloseFile, Procedure, Function, Class, Super,
+    ]
+};
+
 impl Kw {
-    /// Keywords that close a block. Used for error recovery and to report
-    /// mismatched terminators.
     pub fn is_block_end(self) -> bool {
-        matches!(
-            self,
-            Kw::EndIf
-                | Kw::Else
-                | Kw::EndCase
-                | Kw::Otherwise
-                | Kw::EndWhile
-                | Kw::Until
-                | Kw::Next
-                | Kw::EndProcedure
-                | Kw::EndFunction
-                | Kw::EndClass
-                | Kw::EndType
-        )
+        BLOCK_ENDS.contains(&self)
     }
 
-    /// Keywords that may begin a statement.
     pub fn starts_statement(self) -> bool {
-        matches!(
-            self,
-            Kw::Declare
-                | Kw::Constant
-                | Kw::Type
-                | Kw::If
-                | Kw::Case
-                | Kw::While
-                | Kw::Repeat
-                | Kw::For
-                | Kw::Call
-                | Kw::Return
-                | Kw::Break
-                | Kw::Continue
-                | Kw::Output
-                | Kw::Print
-                | Kw::Input
-                | Kw::Read
-                | Kw::OpenFile
-                | Kw::ReadFile
-                | Kw::WriteFile
-                | Kw::Seek
-                | Kw::GetRecord
-                | Kw::PutRecord
-                | Kw::CloseFile
-                | Kw::Procedure
-                | Kw::Function
-                | Kw::Class
-                | Kw::Super
-        )
+        STATEMENT_STARTS.contains(&self)
     }
 }
 
@@ -205,11 +172,7 @@ pub struct Lexer<'s> {
 
 impl<'s> Lexer<'s> {
     pub fn new(src: &'s str) -> Self {
-        Lexer {
-            src,
-            pos: 0,
-            error: None,
-        }
+        Lexer { src, pos: 0, error: None }
     }
 
     pub fn take_error(&mut self) -> Option<Diagnostic> {
@@ -222,6 +185,14 @@ impl<'s> Lexer<'s> {
 
     fn peek_char_at(&self, n: usize) -> Option<char> {
         self.src[self.pos..].chars().nth(n)
+    }
+
+    fn eat_char(&mut self, c: char) -> bool {
+        let hit = self.peek_char() == Some(c);
+        if hit {
+            self.pos += c.len_utf8();
+        }
+        hit
     }
 
     fn bump(&mut self) -> Option<char> {
@@ -241,12 +212,7 @@ impl<'s> Lexer<'s> {
                 }
                 Some(c) if c.is_whitespace() => self.pos += c.len_utf8(),
                 Some('/') if self.peek_char_at(1) == Some('/') => {
-                    while let Some(c) = self.peek_char() {
-                        if c == '\n' {
-                            break;
-                        }
-                        self.pos += c.len_utf8();
-                    }
+                    self.pos = self.src[self.pos..].find('\n').map_or(self.src.len(), |i| self.pos + i);
                 }
                 _ => return newline,
             }
@@ -260,11 +226,7 @@ impl<'s> Lexer<'s> {
             None => Tok::Eof,
             Some(c) => self.lex_from(c, start),
         };
-        Token {
-            tok,
-            span: Span::new(start, self.pos),
-            line_start,
-        }
+        Token { tok, span: Span::new(start, self.pos), line_start }
     }
 
     fn lex_from(&mut self, c: char, start: usize) -> Tok {
@@ -287,37 +249,17 @@ impl<'s> Lexer<'s> {
             '≠' => Tok::Ne,
             '≤' => Tok::Le,
             '≥' => Tok::Ge,
-            '<' => match self.peek_char() {
-                Some('-') => {
-                    self.pos += 1;
-                    Tok::Arrow
-                }
-                Some('>') => {
-                    self.pos += 1;
-                    Tok::Ne
-                }
-                Some('=') => {
-                    self.pos += 1;
-                    Tok::Le
-                }
-                _ => Tok::Lt,
-            },
-            '>' => {
-                if self.peek_char() == Some('=') {
-                    self.pos += 1;
-                    Tok::Ge
-                } else {
-                    Tok::Gt
-                }
-            }
+            '<' if self.eat_char('-') => Tok::Arrow,
+            '<' if self.eat_char('>') => Tok::Ne,
+            '<' if self.eat_char('=') => Tok::Le,
+            '<' => Tok::Lt,
+            '>' if self.eat_char('=') => Tok::Ge,
+            '>' => Tok::Gt,
             '"' | '“' | '”' => self.string(start, c),
             '\'' | '‘' | '’' => self.char_lit(start),
             c if c.is_ascii_digit() => self.number(start),
             c if c.is_alphabetic() || c == '_' => {
-                while self
-                    .peek_char()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
-                {
+                while self.peek_char().is_some_and(|c| c.is_alphanumeric() || c == '_') {
                     self.bump();
                 }
                 Kw::lookup(&self.src[start..self.pos]).map_or(Tok::Ident, Tok::Kw)
@@ -328,9 +270,7 @@ impl<'s> Lexer<'s> {
                 d = match other {
                     '!' => d.help("use `<>` for \"not equal\" and `NOT` for negation"),
                     ';' => d.help("statements end at the end of a line; no `;` is needed"),
-                    '{' | '}' => {
-                        d.help("blocks are closed with keywords such as `ENDIF` and `ENDWHILE`")
-                    }
+                    '{' | '}' => d.help("blocks are closed with keywords such as `ENDIF` and `ENDWHILE`"),
                     '%' => d.help("use `MOD` for the remainder of an integer division"),
                     '|' => d.help("use `OR` for logical disjunction"),
                     _ => d,
@@ -388,31 +328,19 @@ impl<'s> Lexer<'s> {
                 }
             }
         }
-        match chars.as_slice() {
-            [c] => Tok::Char(*c),
-            _ => {
-                let span = Span::new(start, self.pos);
-                let text: String = chars.iter().collect();
-                let mut d = Diagnostic::error(
-                    "E0003",
-                    if chars.is_empty() {
-                        "empty character literal".to_string()
-                    } else {
-                        "character literal may only contain one character".to_string()
-                    },
-                )
-                .primary(span, format!("contains {} characters", chars.len()));
-                if !chars.is_empty() {
-                    d = d.suggest(
-                        span,
-                        format!("\"{text}\""),
-                        "if you meant to write a STRING, use double quotes",
-                    );
-                }
-                self.error = Some(d);
-                Tok::Error
-            }
-        }
+        let span = Span::new(start, self.pos);
+        self.error = Some(match chars.as_slice() {
+            [c] => return Tok::Char(*c),
+            [] => Diagnostic::error("E0003", "empty character literal").primary(span, "contains no character"),
+            _ => Diagnostic::error("E0003", "character literal may only contain one character")
+                .primary(span, format!("contains {} characters", chars.len()))
+                .suggest(
+                    span,
+                    format!("\"{}\"", chars.iter().collect::<String>()),
+                    "if you meant to write a STRING, use double quotes",
+                ),
+        });
+        Tok::Error
     }
 
     fn digits(&mut self) {
@@ -444,12 +372,9 @@ impl<'s> Lexer<'s> {
                         Some(days) => Tok::Date(days),
                         None => {
                             self.error = Some(
-                                Diagnostic::error(
-                                    "E0003",
-                                    format!("invalid date `{}`", &self.src[start..self.pos]),
-                                )
-                                .primary(Span::new(start, self.pos), "no such calendar day")
-                                .note("date literals are written dd/mm/yyyy"),
+                                Diagnostic::error("E0003", format!("invalid date `{}`", &self.src[start..self.pos]))
+                                    .primary(Span::new(start, self.pos), "no such calendar day")
+                                    .note("date literals are written dd/mm/yyyy"),
                             );
                             Tok::Error
                         }
@@ -459,26 +384,20 @@ impl<'s> Lexer<'s> {
             self.pos = save;
         }
 
-        let is_real = self.peek_char() == Some('.')
-            && self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit());
+        let is_real = self.peek_char() == Some('.') && self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit());
         if is_real {
             self.bump();
             self.digits();
-            let text = &self.src[start..self.pos];
-            return Tok::Real(text.parse().unwrap());
+            return Tok::Real(self.src[start..self.pos].parse().unwrap());
         }
-        let text = &self.src[start..self.pos];
-        match text.parse::<i64>() {
+        match self.src[start..self.pos].parse::<i64>() {
             Ok(v) => Tok::Int(v),
             Err(_) => {
                 self.error = Some(
                     Diagnostic::error("E0003", "integer literal is too large")
-                        .primary(
-                            Span::new(start, self.pos),
-                            "does not fit in a 64-bit INTEGER",
-                        )
+                        .primary(Span::new(start, self.pos), "does not fit in a 64-bit INTEGER")
                         .note(format!("the largest INTEGER is {}", i64::MAX))
-                        .help("use a REAL literal such as `1.0e20` written as a decimal"),
+                        .help("write it as a REAL, e.g. `12345678901234567890.0`"),
                 );
                 Tok::Error
             }
@@ -492,29 +411,14 @@ mod tests {
 
     fn toks(s: &str) -> Vec<Tok> {
         let mut lx = Lexer::new(s);
-        let mut v = Vec::new();
-        loop {
-            let t = lx.next_token();
-            if t.tok == Tok::Eof {
-                return v;
-            }
-            v.push(t.tok);
-        }
+        std::iter::from_fn(|| Some(lx.next_token().tok).filter(|t| *t != Tok::Eof)).collect()
     }
 
     #[test]
     fn arrows_and_ops() {
         assert_eq!(
             toks("X ← 1 <- 2.5 <> <="),
-            vec![
-                Tok::Ident,
-                Tok::Arrow,
-                Tok::Int(1),
-                Tok::Arrow,
-                Tok::Real(2.5),
-                Tok::Ne,
-                Tok::Le
-            ]
+            vec![Tok::Ident, Tok::Arrow, Tok::Int(1), Tok::Arrow, Tok::Real(2.5), Tok::Ne, Tok::Le]
         );
     }
 

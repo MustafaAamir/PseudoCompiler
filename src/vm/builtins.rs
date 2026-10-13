@@ -51,10 +51,7 @@ impl Vm<'_> {
                 if n < 0 || n > len {
                     return Err(Fault::new(
                         "R0012",
-                        format!(
-                            "{}: cannot take {n} characters from a string of length {len}",
-                            b.name()
-                        ),
+                        format!("{}: cannot take {n} characters from a string of length {len}", b.name()),
                         "length out of range",
                     )
                     .note(format!("the string is {:?}", &*s)));
@@ -73,24 +70,12 @@ impl Vm<'_> {
                 if start < 1 || n < 0 || start - 1 + n > len {
                     return Err(Fault::new(
                         "R0012",
-                        format!(
-                            "{}: range [{start}, {}] is outside the string",
-                            b.name(),
-                            start + n - 1
-                        ),
+                        format!("{}: range [{start}, {}] is outside the string", b.name(), start + n - 1),
                         "substring out of range",
                     )
-                    .note(format!(
-                        "the string {:?} has {len} characters; positions start at 1",
-                        &*s
-                    )));
+                    .note(format!("the string {:?} has {len} characters; positions start at 1", &*s)));
                 }
-                Value::str(
-                    &s.chars()
-                        .skip((start - 1) as usize)
-                        .take(n as usize)
-                        .collect::<String>(),
-                )
+                Value::str(&s.chars().skip((start - 1) as usize).take(n as usize).collect::<String>())
             }
             Builtin::UCase | Builtin::ToUpper => match arg(0) {
                 Value::Char(c) => Value::Char(c.to_uppercase().next().unwrap_or(*c)),
@@ -169,9 +154,8 @@ impl Vm<'_> {
                 }
             }
             Builtin::Now => {
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs());
+                let secs =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
                 Value::Date((secs / 86_400) as i32)
             }
         })

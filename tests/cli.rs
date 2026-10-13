@@ -31,12 +31,7 @@ fn run_with(name: &str, src: &str, stdin: &str, args: &[&str]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
     let out = child.wait_with_output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     Output {
@@ -54,12 +49,7 @@ fn run(name: &str, src: &str) -> Output {
 fn expect_output(name: &str, src: &str, expected: &str) {
     let o = run(name, src);
     assert_eq!(o.code, 0, "program failed:\n{}", o.stderr);
-    assert_eq!(
-        o.stdout.trim_end(),
-        expected.trim_end(),
-        "stderr:\n{}",
-        o.stderr
-    );
+    assert_eq!(o.stdout.trim_end(), expected.trim_end(), "stderr:\n{}", o.stderr);
 }
 
 /// Compile `src`, expecting a compile error with `code` whose rendering
@@ -67,16 +57,8 @@ fn expect_output(name: &str, src: &str, expected: &str) {
 #[track_caller]
 fn expect_error(name: &str, src: &str, code: &str, needles: &[&str]) {
     let o = run(name, src);
-    assert_eq!(
-        o.code, 1,
-        "expected a compile error, got exit {}:\n{}{}",
-        o.code, o.stdout, o.stderr
-    );
-    assert!(
-        o.stderr.contains(&format!("[{code}]")),
-        "missing {code}:\n{}",
-        o.stderr
-    );
+    assert_eq!(o.code, 1, "expected a compile error, got exit {}:\n{}{}", o.code, o.stdout, o.stderr);
+    assert!(o.stderr.contains(&format!("[{code}]")), "missing {code}:\n{}", o.stderr);
     for n in needles {
         assert!(o.stderr.contains(n), "missing {n:?} in:\n{}", o.stderr);
     }
@@ -85,16 +67,8 @@ fn expect_error(name: &str, src: &str, code: &str, needles: &[&str]) {
 #[track_caller]
 fn expect_runtime_error(name: &str, src: &str, code: &str, needles: &[&str]) {
     let o = run(name, src);
-    assert_eq!(
-        o.code, 2,
-        "expected a runtime error, got exit {}:\n{}{}",
-        o.code, o.stdout, o.stderr
-    );
-    assert!(
-        o.stderr.contains(&format!("[{code}]")),
-        "missing {code}:\n{}",
-        o.stderr
-    );
+    assert_eq!(o.code, 2, "expected a runtime error, got exit {}:\n{}{}", o.code, o.stdout, o.stderr);
+    assert!(o.stderr.contains(&format!("[{code}]")), "missing {code}:\n{}", o.stderr);
     for n in needles {
         assert!(o.stderr.contains(n), "missing {n:?} in:\n{}", o.stderr);
     }
@@ -373,31 +347,18 @@ CLASS Cat INHERITS Pet
 ENDCLASS
 "#,
         "E0300",
-        &[
-            "expected `INTEGER`, found `STRING`",
-            "STR_TO_NUM(GivenBreed)",
-        ],
+        &["expected `INTEGER`, found `STRING`", "STR_TO_NUM(GivenBreed)"],
     );
 }
 
 #[test]
 fn assignment_with_equals() {
-    expect_error(
-        "eq",
-        "DECLARE X : INTEGER\nX = 5\nOUTPUT X\n",
-        "E0100",
-        &["X ← 5"],
-    );
+    expect_error("eq", "DECLARE X : INTEGER\nX = 5\nOUTPUT X\n", "E0100", &["X ← 5"]);
 }
 
 #[test]
 fn concat_number_suggests_conversion() {
-    expect_error(
-        "concat",
-        "DECLARE N : INTEGER\nN ← 3\nOUTPUT \"N=\" & N\n",
-        "E0303",
-        &["NUM_TO_STR(N)"],
-    );
+    expect_error("concat", "DECLARE N : INTEGER\nN ← 3\nOUTPUT \"N=\" & N\n", "E0303", &["NUM_TO_STR(N)"]);
 }
 
 #[test]
@@ -412,40 +373,20 @@ fn typo_suggests_name() {
 
 #[test]
 fn lowercase_keyword() {
-    expect_error(
-        "lower",
-        "DECLARE A : INTEGER\nA ← 1\nif A > 0 THEN\n  OUTPUT A\nENDIF\n",
-        "E0103",
-        &["IF A > 0"],
-    );
+    expect_error("lower", "DECLARE A : INTEGER\nA ← 1\nif A > 0 THEN\n  OUTPUT A\nENDIF\n", "E0103", &["IF A > 0"]);
 }
 
 #[test]
 fn unclosed_and_mismatched_blocks() {
-    expect_error(
-        "unclosed",
-        "IF TRUE THEN\n  OUTPUT 1\n",
-        "E0101",
-        &["this `IF` is never closed"],
-    );
+    expect_error("unclosed", "IF TRUE THEN\n  OUTPUT 1\n", "E0101", &["this `IF` is never closed"]);
     let o = run("mismatch", "WHILE TRUE\n  OUTPUT 1\nENDIF\n");
     assert!(o.stderr.contains("[E0102]"), "{}", o.stderr);
-    assert_eq!(
-        o.stderr.matches("error[").count(),
-        1,
-        "cascading errors:\n{}",
-        o.stderr
-    );
+    assert_eq!(o.stderr.matches("error[").count(), 1, "cascading errors:\n{}", o.stderr);
 }
 
 #[test]
 fn constant_index_out_of_bounds() {
-    expect_error(
-        "oob",
-        "DECLARE A : ARRAY[1:5] OF INTEGER\nA[0] ← 1\n",
-        "E0304",
-        &["index 0 is outside 1:5"],
-    );
+    expect_error("oob", "DECLARE A : ARRAY[1:5] OF INTEGER\nA[0] ← 1\n", "E0304", &["index 0 is outside 1:5"]);
 }
 
 #[test]
@@ -472,12 +413,7 @@ fn deferred_call_checks() {
         "E0302",
         &["does not return a value"],
     );
-    expect_error(
-        "undefined",
-        "CALL Missing()\n",
-        "E0200",
-        &["cannot find procedure or function `Missing`"],
-    );
+    expect_error("undefined", "CALL Missing()\n", "E0200", &["cannot find procedure or function `Missing`"]);
 }
 
 #[test]
@@ -497,12 +433,7 @@ fn next_mismatch() {
 
 #[test]
 fn function_without_return() {
-    expect_error(
-        "noreturn",
-        "FUNCTION F() RETURNS INTEGER\n  OUTPUT 1\nENDFUNCTION\n",
-        "E0207",
-        &["never returns"],
-    );
+    expect_error("noreturn", "FUNCTION F() RETURNS INTEGER\n  OUTPUT 1\nENDFUNCTION\n", "E0207", &["never returns"]);
 }
 
 #[test]
@@ -510,12 +441,7 @@ fn warnings_do_not_block_running() {
     let o = run("warn", "DECLARE Unused : INTEGER\nOUTPUT 1\n");
     assert_eq!(o.code, 0);
     assert!(o.stderr.contains("warning[W0001]"), "{}", o.stderr);
-    let o = run_with(
-        "deny",
-        "DECLARE Unused : INTEGER\nOUTPUT 1\n",
-        "",
-        &["--deny-warnings"],
-    );
+    let o = run_with("deny", "DECLARE Unused : INTEGER\nOUTPUT 1\n", "", &["--deny-warnings"]);
     assert_eq!(o.code, 1);
 }
 
@@ -537,12 +463,7 @@ ENDPROCEDURE
 CALL Fill(6)
 "#,
         "R0001",
-        &[
-            "index 6 is outside 1:5",
-            "off-by-one",
-            "I = 6",
-            "called from the main program",
-        ],
+        &["index 6 is outside 1:5", "off-by-one", "I = 6", "called from the main program"],
     );
 }
 
@@ -558,12 +479,7 @@ fn runtime_uninitialized_variable() {
 
 #[test]
 fn runtime_division_by_zero() {
-    expect_runtime_error(
-        "rt_div",
-        "DECLARE Z : INTEGER\nZ ← 0\nOUTPUT 10 DIV Z\n",
-        "R0003",
-        &["division by zero"],
-    );
+    expect_runtime_error("rt_div", "DECLARE Z : INTEGER\nZ ← 0\nOUTPUT 10 DIV Z\n", "R0003", &["division by zero"]);
 }
 
 #[test]
@@ -580,25 +496,13 @@ fn runtime_recursion_is_collapsed() {
 fn runtime_bad_input() {
     let o = run_with("rt_input", "DECLARE N : INTEGER\nINPUT N\n", "abc\n", &[]);
     assert_eq!(o.code, 2);
-    assert!(
-        o.stderr.contains("invalid input for INTEGER"),
-        "{}",
-        o.stderr
-    );
+    assert!(o.stderr.contains("invalid input for INTEGER"), "{}", o.stderr);
 }
 
 #[test]
 fn explain_and_disasm() {
-    let out = Command::new(env!("CARGO_BIN_EXE_pseudo"))
-        .args(["explain", "E0300"])
-        .output()
-        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_pseudo")).args(["explain", "E0300"]).output().unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("NUM_TO_STR"));
-    let o = run_with(
-        "disasm",
-        "DECLARE A : INTEGER\nA ← 1\nOUTPUT A\n",
-        "",
-        &["disasm"],
-    );
+    let o = run_with("disasm", "DECLARE A : INTEGER\nA ← 1\nOUTPUT A\n", "", &["disasm"]);
     assert!(o.stdout.contains("STORE_GLOBAL g0(A)"), "{}", o.stdout);
 }

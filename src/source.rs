@@ -1,9 +1,7 @@
 //! Source files and byte-offset spans.
 
-use std::fmt;
-
 /// A half-open byte range `[start, end)` into a [`Source`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: u32,
     pub end: u32,
@@ -13,30 +11,17 @@ impl Span {
     pub const DUMMY: Span = Span { start: 0, end: 0 };
 
     pub fn new(start: usize, end: usize) -> Self {
-        Span {
-            start: start as u32,
-            end: end as u32,
-        }
+        Span { start: start as u32, end: end as u32 }
     }
 
     /// The smallest span covering both `self` and `other`.
     pub fn to(self, other: Span) -> Span {
-        Span {
-            start: self.start.min(other.start),
-            end: self.end.max(other.end),
-        }
+        Span { start: self.start.min(other.start), end: self.end.max(other.end) }
     }
 
     /// An empty span positioned just after `self`.
     pub fn after(self) -> Span {
-        Span {
-            start: self.end,
-            end: self.end,
-        }
-    }
-
-    pub fn len(self) -> usize {
-        (self.end - self.start) as usize
+        Span { start: self.end, end: self.end }
     }
 
     pub fn is_empty(self) -> bool {
@@ -45,12 +30,6 @@ impl Span {
 
     pub fn range(self) -> std::ops::Range<usize> {
         self.start as usize..self.end as usize
-    }
-}
-
-impl fmt::Debug for Span {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..{}", self.start, self.end)
     }
 }
 
@@ -64,14 +43,8 @@ pub struct Source {
 impl Source {
     pub fn new(name: impl Into<String>, text: impl Into<String>) -> Self {
         let text = text.into();
-        let line_starts = std::iter::once(0)
-            .chain(text.match_indices('\n').map(|(i, _)| i as u32 + 1))
-            .collect();
-        Source {
-            name: name.into(),
-            text,
-            line_starts,
-        }
+        let line_starts = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i as u32 + 1)).collect();
+        Source { name: name.into(), text, line_starts }
     }
 
     pub fn slice(&self, span: Span) -> &str {
@@ -86,10 +59,6 @@ impl Source {
         }
     }
 
-    pub fn line_count(&self) -> usize {
-        self.line_starts.len()
-    }
-
     pub fn line_start(&self, line: usize) -> u32 {
         self.line_starts[line]
     }
@@ -97,10 +66,7 @@ impl Source {
     /// Text of a zero-based line, without its trailing newline.
     pub fn line_text(&self, line: usize) -> &str {
         let start = self.line_starts[line] as usize;
-        let end = self
-            .line_starts
-            .get(line + 1)
-            .map_or(self.text.len(), |&e| e as usize);
+        let end = self.line_starts.get(line + 1).map_or(self.text.len(), |&e| e as usize);
         self.text[start..end].trim_end_matches(['\n', '\r'])
     }
 

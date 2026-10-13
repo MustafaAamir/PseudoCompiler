@@ -17,12 +17,11 @@
 mod decl;
 mod expr;
 mod stmt;
-pub mod types;
+mod types;
 
 use crate::builtins::Builtin;
 use crate::bytecode::{
-    EnumInfo, FieldMeta, GlobalInfo, Init, LocalInfo, MethodMeta, Op, Program, Proto, ProtoKind,
-    Shape, VarLoc,
+    Conv, EnumInfo, FieldMeta, GlobalInfo, Init, LocalInfo, MethodMeta, Op, Program, Proto, ProtoKind, Shape, VarLoc,
 };
 use crate::diag::{Diagnostic, Diagnostics, best_match};
 use crate::lexer::{Kw, Lexer, Tok, Token};
@@ -67,27 +66,18 @@ struct FnEntry {
     proto: Proto,
     defined: bool,
     span: Span,
-    class: Option<u32>,
 }
 
-struct GlobalVar {
+/// A global or local variable. A local's slot is its index in `FnState::locals`.
+struct Var {
     name: String,
     ty: Ty,
-    span: Span,
-    used: bool,
-    assigned: bool,
-    hidden: bool,
-}
-
-struct Local {
-    name: String,
-    ty: Ty,
-    slot: u16,
     span: Span,
     used: bool,
     assigned: bool,
     byref: bool,
     param: bool,
+    /// Compiler-generated (loop bounds, CASE subjects, ...).
     hidden: bool,
 }
 
@@ -109,6 +99,7 @@ enum Name {
     Variant { ty: u32, ord: u32, span: Span },
 }
 
+#[derive(Clone)]
 struct FieldDef {
     name: String,
     ty: Ty,
@@ -141,7 +132,7 @@ struct LoopCtx {
 struct FnState {
     proto: ProtoRef,
     func: Option<u32>,
-    locals: Vec<Local>,
+    locals: Vec<Var>,
     consts: HashMap<String, (Value, Ty, Span)>,
     loops: Vec<LoopCtx>,
     /// `Some` inside a FUNCTION: the declared return type.
@@ -197,7 +188,7 @@ pub(crate) struct Compiler<'s> {
 
     main: Proto,
     funcs: Vec<FnEntry>,
-    globals: Vec<GlobalVar>,
+    globals: Vec<Var>,
     names: HashMap<String, Name>,
     shapes: Vec<ShapeDef>,
     enums: Vec<EnumInfo>,
@@ -218,11 +209,7 @@ impl<'s> Compiler<'s> {
         let mut c = Compiler {
             src,
             lx: Lexer::new(&src.text),
-            tok: Token {
-                tok: Tok::Eof,
-                span: Span::DUMMY,
-                line_start: true,
-            },
+            tok: Token { tok: Tok::Eof, span: Span::DUMMY, line_start: true },
             ahead: None,
             prev: Span::DUMMY,
             panic: false,
@@ -256,20 +243,12 @@ impl<'s> Compiler<'s> {
         c
     }
 
-    // -----------------------------------------------------------------------
-    // Tokens
-    // -----------------------------------------------------------------------
-
     fn lex(&mut self) -> Token {
-        {
-            let t = self.lx.next_token();
-            if t.tok == Tok::Error
-                && let Some(d) = self.lx.take_error()
-            {
-                self.diags.push(d);
-            }
-            t
+        let t = self.lx.next_token();
+        if let Some(d) = self.lx.take_error() {
+            self.diags.push(d);
         }
+        t
     }
 
     fn advance(&mut self) {
@@ -330,10 +309,7 @@ impl<'s> Compiler<'s> {
     fn miscased_keyword_error(&mut self, kw: Kw) {
         let span = self.tok.span;
         let d = Diagnostic::error("E0103", "keywords must be written in upper case")
-            .primary(
-                span,
-                format!("this looks like the keyword `{}`", kw.as_str()),
-            )
+            .primary(span, format!("this looks like the keyword `{}`", kw.as_str()))
             .suggest(span, kw.as_str(), "write the keyword in capitals");
         self.diags.push(d);
     }
@@ -344,16 +320,12 @@ impl<'s> Compiler<'s> {
         }
         let d = self.expected_error(&format!("`{t}`"), context);
         let d = match t {
-            Tok::Arrow if self.at(Tok::Eq) => d.suggest(
-                self.tok.span,
-                "←",
-                "use `←` (or `<-`) for assignment; `=` compares values",
-            ),
-            Tok::RParen | Tok::RBracket if self.tok.line_start => d.suggest(
-                self.prev.after(),
-                t.to_string(),
-                format!("insert the missing `{t}`"),
-            ),
+            Tok::Arrow if self.at(Tok::Eq) => {
+                d.suggest(self.tok.span, "←", "use `←` (or `<-`) for assignment; `=` compares values")
+            }
+            Tok::RParen | Tok::RBracket if self.tok.line_start => {
+                d.suggest(self.prev.after(), t.to_string(), format!("insert the missing `{t}`"))
+            }
             _ => d,
         };
         self.parse_error(d);
@@ -371,11 +343,7 @@ impl<'s> Compiler<'s> {
         }
         let d = self.expected_error(&format!("`{}`", k.as_str()), context);
         let d = if matches!(k, Kw::Then | Kw::Do | Kw::Of | Kw::To) {
-            d.suggest(
-                self.prev.after(),
-                format!(" {}", k.as_str()),
-                format!("add `{}`", k.as_str()),
-            )
+            d.suggest(self.prev.after(), format!(" {}", k.as_str()), format!("add `{}`", k.as_str()))
         } else {
             d
         };
@@ -385,23 +353,13 @@ impl<'s> Compiler<'s> {
 
     fn expected_error(&self, what: &str, context: &str) -> Diagnostic {
         let found = self.found();
-        let label = if self.at(Tok::Eof) {
-            format!("expected {what}{context}")
-        } else {
-            format!("expected {what}")
-        };
-        let context = if context.is_empty() {
-            String::new()
-        } else {
-            format!(" {context}")
-        };
+        let label = if self.at(Tok::Eof) { format!("expected {what}{context}") } else { format!("expected {what}") };
+        let context = if context.is_empty() { String::new() } else { format!(" {context}") };
         let mut d = Diagnostic::error("E0100", format!("expected {what}{context}, found {found}"));
         // Point just past the previous token when the problem is a missing
         // token at end of line; that is where the user needs to type.
         if self.tok.line_start && self.prev != Span::DUMMY {
-            d = d
-                .primary(self.prev.after(), label)
-                .secondary(self.tok.span, "unexpected token");
+            d = d.primary(self.prev.after(), label).secondary(self.tok.span, "unexpected token");
         } else {
             d = d.primary(self.tok.span, label);
         }
@@ -416,18 +374,11 @@ impl<'s> Compiler<'s> {
         }
         let mut d = self.expected_error("an identifier", context);
         if let Tok::Kw(k) = self.tok.tok {
-            d = d.note(format!(
-                "`{}` is a reserved keyword and cannot be used as a name",
-                k.as_str()
-            ));
+            d = d.note(format!("`{}` is a reserved keyword and cannot be used as a name", k.as_str()));
         }
         self.parse_error(d);
         None
     }
-
-    // -----------------------------------------------------------------------
-    // Diagnostics
-    // -----------------------------------------------------------------------
 
     /// Report a syntax error. Further syntax errors are suppressed until the
     /// parser re-synchronises at a statement boundary.
@@ -459,10 +410,6 @@ impl<'s> Compiler<'s> {
         }
         self.panic = false;
     }
-
-    // -----------------------------------------------------------------------
-    // Emission
-    // -----------------------------------------------------------------------
 
     fn cur(&self) -> &FnState {
         self.fs.last().unwrap()
@@ -503,9 +450,7 @@ impl<'s> Compiler<'s> {
 
     fn patch_jump_to(&mut self, at: usize, target: u32) {
         match &mut self.proto().code[at] {
-            Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfFalseOrPop(t) | Op::JumpIfTrueOrPop(t) => {
-                *t = target
-            }
+            Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfFalseOrPop(t) | Op::JumpIfTrueOrPop(t) => *t = target,
             Op::ForCheck { exit, .. } => *exit = target,
             other => unreachable!("patching non-jump {other:?}"),
         }
@@ -541,29 +486,25 @@ impl<'s> Compiler<'s> {
         self.sites - 1
     }
 
-    // -----------------------------------------------------------------------
-    // Variables
-    // -----------------------------------------------------------------------
-
     /// Where a name is already declared in the current scope, if anywhere.
     fn existing_decl(&self, name: &str) -> Option<Span> {
         let f = self.cur();
         if f.is_main() {
-            return match self.names.get(name)? {
-                Name::Var(g) => Some(self.globals[*g as usize].span),
-                Name::Const { span, .. } | Name::Type { span, .. } | Name::Variant { span, .. } => {
-                    Some(*span)
-                }
-                Name::Func(i) => self.funcs[*i as usize]
-                    .defined
-                    .then(|| self.funcs[*i as usize].span),
-            };
+            return self.existing_decl_global(name);
         }
         f.locals
             .iter()
             .find(|l| l.name == name && !l.hidden)
             .map(|l| l.span)
             .or_else(|| f.consts.get(name).map(|c| c.2))
+    }
+
+    fn existing_decl_global(&self, name: &str) -> Option<Span> {
+        match self.names.get(name)? {
+            Name::Var(g) => Some(self.globals[*g as usize].span),
+            Name::Const { span, .. } | Name::Type { span, .. } | Name::Variant { span, .. } => Some(*span),
+            Name::Func(i) => self.funcs[*i as usize].defined.then(|| self.funcs[*i as usize].span),
+        }
     }
 
     fn duplicate_error(&mut self, name: &str, span: Span, first: Span) {
@@ -580,75 +521,57 @@ impl<'s> Compiler<'s> {
             self.duplicate_error(name, span, first);
         }
         if self.cur().is_main() {
-            let g = self.globals.len() as u32;
-            self.globals.push(GlobalVar {
-                name: name.to_string(),
-                ty,
-                span,
-                used: false,
-                assigned: false,
-                hidden: false,
-            });
-            self.names.insert(name.to_string(), Name::Var(g));
-            VarLoc::Global(g)
-        } else {
-            if let Some(Name::Var(g)) = self.names.get(name) {
-                let gspan = self.globals[*g as usize].span;
-                self.error(
-                    Diagnostic::warning(
-                        "W0004",
-                        format!("local `{name}` shadows a global variable"),
-                    )
+            let v = self.push_global(name.to_string(), ty, span, false);
+            if let VarLoc::Global(g) = v {
+                self.names.insert(name.to_string(), Name::Var(g));
+            }
+            return v;
+        }
+        if let Some(Name::Var(g)) = self.names.get(name) {
+            let gspan = self.globals[*g as usize].span;
+            self.error(
+                Diagnostic::warning("W0004", format!("local `{name}` shadows a global variable"))
                     .primary(span, "this local declaration...")
                     .secondary(gspan, "...hides this global")
                     .help("inside this routine the global cannot be reached; consider renaming"),
-                );
-            }
-            self.push_local(name, ty, span, false, false, false)
+            );
         }
+        self.push_local(name, ty, span, false, false, false)
     }
 
-    fn push_local(
-        &mut self,
-        name: &str,
-        ty: Ty,
-        span: Span,
-        param: bool,
-        byref: bool,
-        hidden: bool,
-    ) -> VarLoc {
+    fn push_global(&mut self, name: String, ty: Ty, span: Span, hidden: bool) -> VarLoc {
+        let var = Var { name, ty, span, used: hidden, assigned: hidden, byref: false, param: false, hidden };
+        self.globals.push(var);
+        VarLoc::Global(self.globals.len() as u32 - 1)
+    }
+
+    fn push_local(&mut self, name: &str, ty: Ty, span: Span, param: bool, byref: bool, hidden: bool) -> VarLoc {
         let f = self.cur_mut();
-        let slot = f.locals.len() as u16;
-        f.locals.push(Local {
-            name: name.to_string(),
-            ty,
-            slot,
-            span,
-            used: false,
-            assigned: param,
-            byref,
-            param,
-            hidden,
-        });
-        VarLoc::Local(slot)
+        let var = Var { name: name.to_string(), ty, span, used: false, assigned: param, byref, param, hidden };
+        f.locals.push(var);
+        VarLoc::Local(f.locals.len() as u16 - 1)
     }
 
     /// A compiler-generated variable (loop bounds, CASE subjects, ...).
     fn hidden_var(&mut self, what: &str, ty: Ty, span: Span) -> VarLoc {
         if self.cur().is_main() {
-            let g = self.globals.len() as u32;
-            self.globals.push(GlobalVar {
-                name: format!("<{what}>"),
-                ty,
-                span,
-                used: true,
-                assigned: true,
-                hidden: true,
-            });
-            VarLoc::Global(g)
+            self.push_global(format!("<{what}>"), ty, span, true)
         } else {
             self.push_local(&format!("<{what}>"), ty, span, false, false, true)
         }
+    }
+
+    /// An undefined function slot, filled in when the definition is compiled.
+    fn new_fn_slot(&mut self, name: &str, span: Span) -> u32 {
+        self.funcs.push(FnEntry {
+            kind: FnKind::Function,
+            params: Vec::new(),
+            ret: Ty::Unknown,
+            proto: Proto::new(name, ProtoKind::Function, span),
+            defined: false,
+            span,
+        });
+        self.funcs.len() as u32 - 1
     }
 
     fn load_var(&mut self, v: VarLoc, span: Span) {
@@ -665,62 +588,48 @@ impl<'s> Compiler<'s> {
         };
     }
 
-    fn var_ty(&self, v: VarLoc) -> Ty {
+    fn find_local(&self, name: &str) -> Option<VarLoc> {
+        let i = self.cur().locals.iter().rposition(|l| l.name == name && !l.hidden)?;
+        Some(VarLoc::Local(i as u16))
+    }
+
+    /// A local or global variable visible here.
+    fn lookup_var(&self, name: &str) -> Option<VarLoc> {
+        self.find_local(name).or(match self.names.get(name) {
+            Some(Name::Var(g)) => Some(VarLoc::Global(*g)),
+            _ => None,
+        })
+    }
+
+    fn var(&self, v: VarLoc) -> &Var {
         match v {
-            VarLoc::Local(s) => self.cur().locals[s as usize].ty.clone(),
-            VarLoc::Global(g) => self.globals[g as usize].ty.clone(),
+            VarLoc::Local(s) => &self.cur().locals[s as usize],
+            VarLoc::Global(g) => &self.globals[g as usize],
         }
     }
 
     fn mark_var(&mut self, v: VarLoc, used: bool, assigned: bool) {
-        match v {
-            VarLoc::Local(s) => {
-                let l = &mut self.cur_mut().locals[s as usize];
-                l.used |= used;
-                l.assigned |= assigned;
-            }
-            VarLoc::Global(g) => {
-                let gl = &mut self.globals[g as usize];
-                gl.used |= used;
-                gl.assigned |= assigned;
-            }
-        }
-    }
-
-    fn var_decl_span(&self, v: VarLoc) -> Span {
-        match v {
-            VarLoc::Local(s) => self.cur().locals[s as usize].span,
-            VarLoc::Global(g) => self.globals[g as usize].span,
-        }
+        let var = match v {
+            VarLoc::Local(s) => &mut self.cur_mut().locals[s as usize],
+            VarLoc::Global(g) => &mut self.globals[g as usize],
+        };
+        var.used |= used;
+        var.assigned |= assigned;
     }
 
     /// Every name visible here, for "did you mean" suggestions.
     fn visible_names(&self) -> Vec<String> {
         let f = self.cur();
-        let mut v: Vec<String> = f
-            .locals
-            .iter()
-            .filter(|l| !l.hidden)
-            .map(|l| l.name.clone())
-            .collect();
+        let mut v: Vec<String> = f.locals.iter().filter(|l| !l.hidden).map(|l| l.name.clone()).collect();
         v.extend(f.consts.keys().cloned());
         if let Some(c) = f.class {
-            v.extend(
-                self.shapes[c as usize]
-                    .fields
-                    .iter()
-                    .map(|f| f.name.clone()),
-            );
+            v.extend(self.shapes[c as usize].fields.iter().map(|f| f.name.clone()));
             v.extend(self.all_method_names(c));
         }
         v.extend(self.names.keys().cloned());
         v.extend(Builtin::ALL.iter().map(|b| b.name().to_string()));
         v
     }
-
-    // -----------------------------------------------------------------------
-    // Types
-    // -----------------------------------------------------------------------
 
     fn ty_name(&self, ty: &Ty) -> String {
         match ty {
@@ -762,11 +671,11 @@ impl<'s> Compiler<'s> {
         match (target, src) {
             (Ty::Error, _) | (_, Ty::Error) | (Ty::Unknown, _) => Compat::Same,
             (t, Ty::Unknown) => match t.conv() {
-                crate::bytecode::Conv::Any => Compat::Same,
-                c => Compat::Check(c),
+                Conv::Any => Compat::Same,
+                c => Compat::Convert(Op::Check(c)),
             },
-            (Ty::Real, Ty::Int) => Compat::IntToReal,
-            (Ty::Str, Ty::Char) => Compat::CharToStr,
+            (Ty::Real, Ty::Int) => Compat::Convert(Op::IntToReal),
+            (Ty::Str, Ty::Char) => Compat::Convert(Op::Convert(Conv::Str)),
             (Ty::Class(a), Ty::Class(b)) if self.is_subclass(*b, *a) => Compat::Same,
             _ => Compat::Incompatible,
         }
@@ -777,10 +686,7 @@ impl<'s> Compiler<'s> {
         let init = match ty {
             Ty::Array(a) => {
                 let elem = self.init_for(&a.elem).unwrap_or(0);
-                Init::Array {
-                    dims: Rc::from(a.dims.as_slice()),
-                    elem,
-                }
+                Init::Array { dims: Rc::from(a.dims.as_slice()), elem }
             }
             Ty::Record(s) => Init::Record(*s),
             _ => return None,
@@ -788,10 +694,6 @@ impl<'s> Compiler<'s> {
         self.inits.push(init);
         Some(self.inits.len() as u32 - 1)
     }
-
-    // -----------------------------------------------------------------------
-    // Classes
-    // -----------------------------------------------------------------------
 
     fn find_method(&self, mut class: u32, name: &str) -> Option<&MethodDef> {
         loop {
@@ -815,58 +717,34 @@ impl<'s> Compiler<'s> {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Finishing
-    // -----------------------------------------------------------------------
-
     fn finish(mut self) -> (Option<Program>, Diagnostics) {
         self.resolve_pending_calls();
-        self.warn_unused_globals();
+        let globals = std::mem::take(&mut self.globals);
+        self.warn_unused(&globals);
+        self.globals = globals;
 
         if self.diags.has_errors() {
             return (None, self.diags);
         }
 
-        let shapes = self
-            .shapes
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let fields: Vec<FieldMeta> = s
-                    .fields
-                    .iter()
-                    .map(|f| FieldMeta {
-                        name: f.name.clone(),
-                        sym: *self.symbol_ids.get(&f.name).unwrap_or(&u32::MAX),
-                        private: f.private,
-                        owner: f.owner,
-                        ty: self.ty_name(&f.ty),
-                    })
-                    .collect();
-                let methods = s
-                    .methods
-                    .iter()
-                    .map(|(n, m)| {
-                        let sym = self.symbol_ids[n];
-                        (
-                            sym,
-                            MethodMeta {
-                                func: m.func,
-                                private: m.private,
-                                owner: m.owner,
-                            },
-                        )
-                    })
-                    .collect();
-                (i, fields, methods)
-            })
-            .collect::<Vec<_>>();
-        let mut shape_out = Vec::new();
-        for (i, fields, methods) in shapes {
+        let mut shapes = Vec::new();
+        for i in 0..self.shapes.len() {
             let tys: Vec<Ty> = self.shapes[i].fields.iter().map(|f| f.ty.clone()).collect();
             let field_inits = tys.iter().map(|t| self.init_for(t).unwrap_or(0)).collect();
             let s = &self.shapes[i];
-            shape_out.push(Shape {
+            let fields = (s.fields.iter())
+                .map(|f| FieldMeta {
+                    name: f.name.clone(),
+                    sym: self.symbol_ids[&f.name],
+                    private: f.private,
+                    owner: f.owner,
+                    ty: self.ty_name(&f.ty),
+                })
+                .collect();
+            let methods = (s.methods.iter())
+                .map(|(n, m)| (self.symbol_ids[n], MethodMeta { func: m.func, private: m.private, owner: m.owner }))
+                .collect();
+            shapes.push(Shape {
                 name: s.name.clone(),
                 is_class: s.is_class,
                 parent: s.parent,
@@ -879,18 +757,14 @@ impl<'s> Compiler<'s> {
         let globals = self
             .globals
             .iter()
-            .map(|g| GlobalInfo {
-                name: g.name.clone(),
-                ty: self.ty_name(&g.ty),
-                decl: g.span,
-            })
+            .map(|g| GlobalInfo { name: g.name.clone(), ty: self.ty_name(&g.ty), decl: g.span })
             .collect();
         let functions = self.funcs.into_iter().map(|f| Rc::new(f.proto)).collect();
         let program = Program {
             main: Rc::new(self.main),
             functions,
             globals,
-            shapes: shape_out,
+            shapes,
             enums: self.enums,
             inits: self.inits,
             symbols: self.symbols,
@@ -905,17 +779,10 @@ impl<'s> Compiler<'s> {
             let f = &self.funcs[call.func as usize];
             if !f.defined {
                 let candidates = self.visible_names();
-                let mut d = Diagnostic::error(
-                    "E0200",
-                    format!("cannot find procedure or function `{}`", call.name),
-                )
-                .primary(call.name_span, "not defined anywhere in this file");
+                let mut d = Diagnostic::error("E0200", format!("cannot find procedure or function `{}`", call.name))
+                    .primary(call.name_span, "not defined anywhere in this file");
                 if let Some(m) = best_match(&call.name, candidates.iter().map(String::as_str)) {
-                    d = d.suggest(
-                        call.name_span,
-                        m,
-                        format!("a routine with a similar name exists: `{m}`"),
-                    );
+                    d = d.suggest(call.name_span, m, format!("a routine with a similar name exists: `{m}`"));
                 } else {
                     d = d.help(format!(
                         "define it with `PROCEDURE {}(...)` ... `ENDPROCEDURE` or `FUNCTION {}(...) RETURNS ...`",
@@ -932,13 +799,10 @@ impl<'s> Compiler<'s> {
             self.check_deferred_args(call, &params, decl, &sig);
             if kind == FnKind::Procedure && !call.as_statement {
                 self.error(
-                    Diagnostic::error(
-                        "E0302",
-                        format!("procedure `{}` does not return a value", call.name),
-                    )
-                    .primary(call.name_span.to(call.args_span), "used as a value here")
-                    .secondary(decl, "declared as a PROCEDURE here")
-                    .help("declare it as a FUNCTION with `RETURNS <type>` to produce a value"),
+                    Diagnostic::error("E0302", format!("procedure `{}` does not return a value", call.name))
+                        .primary(call.name_span.to(call.args_span), "used as a value here")
+                        .secondary(decl, "declared as a PROCEDURE here")
+                        .help("declare it as a FUNCTION with `RETURNS <type>` to produce a value"),
                 );
             }
         }
@@ -947,14 +811,7 @@ impl<'s> Compiler<'s> {
     /// Check (and patch) the arguments of a call compiled before its callee.
     fn check_deferred_args(&mut self, call: &PendingCall, params: &[Param], decl: Span, sig: &str) {
         if call.args.len() != params.len() {
-            self.arity_error(
-                &call.name,
-                call.name_span.to(call.args_span),
-                params.len(),
-                call.args.len(),
-                decl,
-                sig,
-            );
+            self.arity_error(&call.name, call.name_span.to(call.args_span), params.len(), call.args.len(), decl, sig);
             return;
         }
         for (arg, p) in call.args.iter().zip(params) {
@@ -962,9 +819,7 @@ impl<'s> Compiler<'s> {
                 match arg.patch {
                     Some((pc, op)) => {
                         self.proto_of(call.proto).code[pc] = op;
-                        if self.compat(&p.ty, &arg.ty) != Compat::Same
-                            || self.compat(&arg.ty, &p.ty) != Compat::Same
-                        {
+                        if self.compat(&p.ty, &arg.ty) != Compat::Same || self.compat(&arg.ty, &p.ty) != Compat::Same {
                             self.byref_type_error(arg.span, &arg.ty, p);
                         }
                     }
@@ -979,47 +834,7 @@ impl<'s> Compiler<'s> {
         }
     }
 
-    fn warn_unused_globals(&mut self) {
-        let mut ws = Vec::new();
-        for g in &self.globals {
-            if g.hidden || g.name.starts_with('_') {
-                continue;
-            }
-            if !g.used && !g.assigned {
-                ws.push(
-                    Diagnostic::warning("W0001", format!("unused variable `{}`", g.name))
-                        .primary(g.span, "declared but never used")
-                        .help(format!(
-                            "remove it, or prefix it with an underscore: `_{}`",
-                            g.name
-                        )),
-                );
-            } else if !g.used {
-                ws.push(
-                    Diagnostic::warning(
-                        "W0001",
-                        format!("variable `{}` is assigned but never read", g.name),
-                    )
-                    .primary(g.span, "declared here"),
-                );
-            }
-        }
-        for w in ws {
-            self.error(w);
-        }
-    }
-
-    // Shared error constructors -------------------------------------------
-
-    fn arity_error(
-        &mut self,
-        name: &str,
-        span: Span,
-        expected: usize,
-        got: usize,
-        decl: Span,
-        sig: &str,
-    ) {
+    fn arity_error(&mut self, name: &str, span: Span, expected: usize, got: usize, decl: Span, sig: &str) {
         let plural = |n: usize| if n == 1 { "" } else { "s" };
         let mut d = Diagnostic::error(
             "E0301",
@@ -1029,10 +844,7 @@ impl<'s> Compiler<'s> {
                 if got == 1 { "was" } else { "were" }
             ),
         )
-        .primary(
-            span,
-            format!("expected {expected} argument{}", plural(expected)),
-        );
+        .primary(span, format!("expected {expected} argument{}", plural(expected)));
         if decl != Span::DUMMY {
             d = d.secondary(decl, "defined here");
         }
@@ -1041,14 +853,11 @@ impl<'s> Compiler<'s> {
 
     fn byref_value_error(&mut self, span: Span, p: &Param) {
         self.error(
-            Diagnostic::error(
-                "E0308",
-                format!("`BYREF` parameter `{}` needs a variable", p.name),
-            )
-            .primary(span, "this is a value, not a variable")
-            .secondary(p.span, "parameter declared BYREF here")
-            .help("store the value in a variable first and pass that variable")
-            .note("a BYREF parameter lets the routine modify the caller's variable"),
+            Diagnostic::error("E0308", format!("`BYREF` parameter `{}` needs a variable", p.name))
+                .primary(span, "this is a value, not a variable")
+                .secondary(p.span, "parameter declared BYREF here")
+                .help("store the value in a variable first and pass that variable")
+                .note("a BYREF parameter lets the routine modify the caller's variable"),
         );
     }
 
@@ -1066,8 +875,8 @@ impl<'s> Compiler<'s> {
     fn mismatch(&self, expected: &Ty, found: &Ty, span: Span) -> Diagnostic {
         let (e, f) = (self.ty_name(expected), self.ty_name(found));
         let text = self.text(span);
-        let mut d = Diagnostic::error("E0300", "mismatched types")
-            .primary(span, format!("expected `{e}`, found `{f}`"));
+        let mut d =
+            Diagnostic::error("E0300", "mismatched types").primary(span, format!("expected `{e}`, found `{f}`"));
         d = match (expected, found) {
             (Ty::Str, Ty::Int | Ty::Real) => {
                 d.suggest(span, format!("NUM_TO_STR({text})"), "convert the number to a STRING")
@@ -1078,11 +887,9 @@ impl<'s> Compiler<'s> {
             (Ty::Int, Ty::Real) => d
                 .suggest(span, format!("INT({text})"), "truncate the REAL to an INTEGER")
                 .note("REAL values are never converted to INTEGER implicitly, because that loses information"),
-            (Ty::Char, Ty::Str) if text.chars().count() == 3 && text.starts_with('"') => d.suggest(
-                span,
-                format!("'{}'", &text[1..text.len() - 1]),
-                "use single quotes for a CHAR literal",
-            ),
+            (Ty::Char, Ty::Str) if text.chars().count() == 3 && text.starts_with('"') => {
+                d.suggest(span, format!("'{}'", &text[1..text.len() - 1]), "use single quotes for a CHAR literal")
+            }
             (Ty::Bool, Ty::Int) => d.note("INTEGER values are not truth values; compare explicitly, e.g. `X <> 0`"),
             (Ty::Class(a), Ty::Class(b)) => d.note(format!(
                 "`{}` does not inherit from `{}`",
@@ -1099,32 +906,21 @@ impl<'s> Compiler<'s> {
     fn convert_top(&mut self, expected: &Ty, found: &Ty, span: Span) -> bool {
         match self.compat(expected, found) {
             Compat::Same => true,
-            Compat::IntToReal => {
-                self.emit(Op::IntToReal, span);
-                true
-            }
-            Compat::CharToStr => {
-                self.emit(Op::Convert(crate::bytecode::Conv::Str), span);
-                true
-            }
-            Compat::Check(c) => {
-                self.emit(Op::Check(c), span);
+            Compat::Convert(op) => {
+                self.emit(op, span);
                 true
             }
             Compat::Incompatible => false,
         }
     }
 
-    fn new_array_ty(dims: Vec<(i64, i64)>, elem: Ty) -> Ty {
-        Ty::Array(Rc::new(ArrayTy { dims, elem }))
-    }
-
     fn local_infos(&self, f: &FnState) -> Vec<LocalInfo> {
         f.locals
             .iter()
-            .map(|l| LocalInfo {
+            .enumerate()
+            .map(|(slot, l)| LocalInfo {
                 name: l.name.clone(),
-                slot: l.slot,
+                slot: slot as u16,
                 ty: self.ty_name(&l.ty),
                 decl: l.span,
                 byref: l.byref,
@@ -1132,8 +928,8 @@ impl<'s> Compiler<'s> {
             .collect()
     }
 
-    fn warn_unused_locals(&mut self, f: &FnState) {
-        for l in &f.locals {
+    fn warn_unused(&mut self, vars: &[Var]) {
+        for l in vars {
             if l.hidden || l.name.starts_with('_') || l.name == "SELF" {
                 continue;
             }
@@ -1142,18 +938,12 @@ impl<'s> Compiler<'s> {
                 self.error(
                     Diagnostic::warning("W0001", format!("unused {what} `{}`", l.name))
                         .primary(l.span, format!("{what} is never used"))
-                        .help(format!(
-                            "if this is intentional, prefix it with an underscore: `_{}`",
-                            l.name
-                        )),
+                        .help(format!("if this is intentional, prefix it with an underscore: `_{}`", l.name)),
                 );
             } else if !l.used && !l.byref {
                 self.error(
-                    Diagnostic::warning(
-                        "W0001",
-                        format!("{what} `{}` is assigned but never read", l.name),
-                    )
-                    .primary(l.span, "declared here"),
+                    Diagnostic::warning("W0001", format!("{what} `{}` is assigned but never read", l.name))
+                        .primary(l.span, "declared here"),
                 );
             }
         }

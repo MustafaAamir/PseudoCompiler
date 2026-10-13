@@ -1,6 +1,6 @@
 //! Static types tracked by the single-pass compiler.
 
-use crate::bytecode::Conv;
+use crate::bytecode::{Conv, Op};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,11 +68,8 @@ impl Ty {
 #[derive(Debug, PartialEq)]
 pub enum Compat {
     Same,
-    /// INTEGER -> REAL
-    IntToReal,
-    /// CHAR -> STRING
-    CharToStr,
-    /// Statically unknown source: insert a run-time check.
-    Check(Conv),
+    /// Needs this instruction: a widening (INTEGER -> REAL, CHAR -> STRING)
+    /// or a run-time check of a statically unknown value.
+    Convert(Op),
     Incompatible,
 }

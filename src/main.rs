@@ -108,17 +108,13 @@ fn run(src: &Source, opts: &Opts) -> ExitCode {
     };
     let stdout = io::stdout();
     let stdin = io::stdin();
-    let mut vm = vm::Vm::new(
-        &program,
-        Box::new(io::BufWriter::new(stdout.lock())),
-        Box::new(stdin.lock()),
-    );
+    let mut vm = vm::Vm::new(&program, Box::new(io::BufWriter::new(stdout.lock())), Box::new(stdin.lock()));
     vm.trace = opts.trace;
     let start = std::time::Instant::now();
     let result = vm.run();
     let elapsed = start.elapsed();
     if opts.stats {
-        eprintln!("{}", vm.stats.report(&program, &vm.cache_report()));
+        eprintln!("{}", vm.report());
         eprintln!("wall time             : {elapsed:.2?}");
     }
     match result {
@@ -155,11 +151,7 @@ fn tokens(src: &Source) -> ExitCode {
         let t = lx.next_token();
         let (line, col) = src.line_col(t.span.start);
         let nl = if t.line_start { "⏎" } else { " " };
-        println!(
-            "{line:>4}:{col:<3} {nl} {:<24} {:?}",
-            format!("{:?}", t.tok),
-            src.slice(t.span)
-        );
+        println!("{line:>4}:{col:<3} {nl} {:<24} {:?}", format!("{:?}", t.tok), src.slice(t.span));
         if let Some(d) = lx.take_error() {
             eprintln!("{}", Renderer::new(src, false).render(&d));
         }

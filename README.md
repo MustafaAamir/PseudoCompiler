@@ -53,8 +53,7 @@ compiler type-checks and emits bytecode as it parses.
   results of forward calls. Where such a value meets a typed slot, a
   `CHECK` instruction verifies it at run time.
 * **Superinstructions.** `FOR` loops compile to fused `FOR_CHECK`/`FOR_STEP`
-  instructions. Integer arithmetic on statically INTEGER operands uses
-  specialised opcodes, and negative literals are folded.
+  instructions, and negative literals are folded.
 
 ### Smalltalk-style objects
 

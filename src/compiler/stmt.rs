@@ -42,14 +42,9 @@ impl Compiler<'_> {
             _ => "TYPE",
         };
         self.error(
-            Diagnostic::error(
-                "E0102",
-                format!("`{}` without a matching `{opener}`", k.as_str()),
-            )
-            .primary(self.tok.span, "nothing to close here")
-            .help(format!(
-                "remove it, or check for an earlier `{opener}` that was closed too soon"
-            )),
+            Diagnostic::error("E0102", format!("`{}` without a matching `{opener}`", k.as_str()))
+                .primary(self.tok.span, "nothing to close here")
+                .help(format!("remove it, or check for an earlier `{opener}` that was closed too soon")),
         );
     }
 
@@ -59,21 +54,13 @@ impl Compiler<'_> {
             self.synchronize();
             return;
         }
-        let trailing = !self.tok.line_start
-            && !self.at(Tok::Eof)
-            && !matches!(self.tok.tok, Tok::Kw(k) if k.is_block_end());
+        let trailing =
+            !self.tok.line_start && !self.at(Tok::Eof) && !matches!(self.tok.tok, Tok::Kw(k) if k.is_block_end());
         if trailing {
-            let d = Diagnostic::error(
-                "E0100",
-                format!("expected end of line, found {}", self.found()),
-            )
-            .primary(self.tok.span, "unexpected after the end of the statement")
-            .help("each statement goes on its own line");
-            let d = if self.at(Tok::Eq) {
-                d.suggest(self.tok.span, "←", "to assign, use `←`")
-            } else {
-                d
-            };
+            let d = Diagnostic::error("E0100", format!("expected end of line, found {}", self.found()))
+                .primary(self.tok.span, "unexpected after the end of the statement")
+                .help("each statement goes on its own line");
+            let d = if self.at(Tok::Eq) { d.suggest(self.tok.span, "←", "to assign, use `←`") } else { d };
             self.parse_error(d);
             self.synchronize();
         }
@@ -96,9 +83,7 @@ impl Compiler<'_> {
                 self.miscased_keyword_error(k);
                 self.tok.tok = Tok::Kw(k);
             }
-            if matches!(self.tok.tok, Tok::Kw(k) if k.is_block_end())
-                || (case_arms && self.at_case_label())
-            {
+            if matches!(self.tok.tok, Tok::Kw(k) if k.is_block_end()) || (case_arms && self.at_case_label()) {
                 break;
             }
             let start = self.tok.span;
@@ -125,7 +110,7 @@ impl Compiler<'_> {
     }
 
     fn is_declared(&self, name: &str) -> bool {
-        self.cur().locals.iter().any(|l| l.name == name) || self.names.contains_key(name)
+        self.lookup_var(name).is_some() || self.names.contains_key(name)
     }
 
     fn at_case_label(&mut self) -> bool {
@@ -133,9 +118,7 @@ impl Compiler<'_> {
             return false;
         }
         match self.tok.tok {
-            Tok::Int(_) | Tok::Real(_) | Tok::Str | Tok::Char(_) | Tok::Date(_) | Tok::Minus => {
-                true
-            }
+            Tok::Int(_) | Tok::Real(_) | Tok::Str | Tok::Char(_) | Tok::Date(_) | Tok::Minus => true,
             Tok::Kw(Kw::True | Kw::False) => true,
             Tok::Ident => matches!(self.peek().tok, Tok::Colon | Tok::Kw(Kw::To)),
             _ => false,
@@ -150,9 +133,7 @@ impl Compiler<'_> {
     /// Whether an enclosing (not the innermost) open block accepts `k`.
     fn enclosing_accepts(&self, k: Kw) -> bool {
         let outer = &self.open_blocks[..self.open_blocks.len().saturating_sub(1)];
-        outer.iter().any(|&e| {
-            e == k || (k == Kw::Else && e == Kw::EndIf) || (k == Kw::Otherwise && e == Kw::EndCase)
-        })
+        outer.iter().any(|&e| e == k || (k == Kw::Else && e == Kw::EndIf) || (k == Kw::Otherwise && e == Kw::EndCase))
     }
 
     pub(super) fn close_block(&mut self, end: Kw, opener: &str, opener_span: Span) {
@@ -177,16 +158,11 @@ impl Compiler<'_> {
                 .help(format!("add `{e}` after the last statement of the block")),
             Tok::Kw(k) if k.is_block_end() => Diagnostic::error(
                 "E0102",
-                format!(
-                    "mismatched block terminator: expected `{e}`, found `{}`",
-                    k.as_str()
-                ),
+                format!("mismatched block terminator: expected `{e}`, found `{}`", k.as_str()),
             )
             .primary(self.tok.span, format!("expected `{e}`"))
             .secondary(opener_span, format!("this `{opener}` must be closed first"))
-            .help(format!(
-                "insert `{e}` before this line, or check the nesting of your blocks"
-            )),
+            .help(format!("insert `{e}` before this line, or check the nesting of your blocks")),
             _ => self
                 .expected_error(&format!("`{e}`"), &format!("to close `{opener}`"))
                 .secondary(opener_span, format!("`{opener}` opened here")),
@@ -256,11 +232,8 @@ impl Compiler<'_> {
             Kw::Super => self.expr_stmt(),
             Kw::Public | Kw::Private => {
                 self.parse_error(
-                    Diagnostic::error(
-                        "E0100",
-                        format!("`{}` is only allowed inside a CLASS", k.as_str()),
-                    )
-                    .primary(self.tok.span, "not inside a class definition"),
+                    Diagnostic::error("E0100", format!("`{}` is only allowed inside a CLASS", k.as_str()))
+                        .primary(self.tok.span, "not inside a class definition"),
                 );
             }
             _ => {
@@ -270,10 +243,6 @@ impl Compiler<'_> {
         }
         false
     }
-
-    // -----------------------------------------------------------------------
-    // Assignment and expression statements
-    // -----------------------------------------------------------------------
 
     fn expr_stmt(&mut self) {
         let e = self.postfix();
@@ -343,16 +312,12 @@ impl Compiler<'_> {
             return;
         }
         let tn = self.ty_name(&target.ty);
-        let mut d = self
-            .mismatch(&target.ty, &value.ty, value.span)
-            .secondary(target.span, format!("this has type `{tn}`"));
+        let mut d =
+            self.mismatch(&target.ty, &value.ty, value.span).secondary(target.span, format!("this has type `{tn}`"));
         if let Some(var) = target.var {
-            let decl = self.var_decl_span(var);
+            let decl = self.var(var).span;
             if self.src.line_index(decl.start) != self.src.line_index(target.span.start) {
-                d = d.note_at(
-                    decl,
-                    format!("`{}` was declared as `{tn}` here", self.text(target.span)),
-                );
+                d = d.note_at(decl, format!("`{}` was declared as `{tn}` here", self.text(target.span)));
             }
         }
         if value.ty == Ty::Void {
@@ -364,9 +329,7 @@ impl Compiler<'_> {
     fn call_stmt(&mut self) {
         let call_span = self.tok.span;
         self.advance();
-        let e = if self.at(Tok::Ident)
-            && !matches!(self.peek().tok, Tok::Dot | Tok::LBracket | Tok::Caret)
-        {
+        let e = if self.at(Tok::Ident) && !matches!(self.peek().tok, Tok::Dot | Tok::LBracket | Tok::Caret) {
             let span = self.tok.span;
             let name = self.text(span).to_string();
             self.advance();
@@ -396,10 +359,6 @@ impl Compiler<'_> {
         }
         self.emit(Op::Pop, e.span);
     }
-
-    // -----------------------------------------------------------------------
-    // Control flow
-    // -----------------------------------------------------------------------
 
     fn if_stmt(&mut self) -> bool {
         let if_span = self.tok.span;
@@ -528,10 +487,7 @@ impl Compiler<'_> {
         self.condition("WHILE", span);
         self.eat_kw(Kw::Do);
         let exit = self.emit(Op::JumpIfFalse(0), span);
-        self.cur_mut().loops.push(LoopCtx {
-            breaks: vec![],
-            continues: vec![],
-        });
+        self.cur_mut().loops.push(LoopCtx { breaks: vec![], continues: vec![] });
         self.block(false);
         let ctx = self.cur_mut().loops.pop().unwrap();
         self.emit(Op::Jump(start), span);
@@ -545,10 +501,7 @@ impl Compiler<'_> {
         self.advance();
         self.open_block(Kw::Until);
         let start = self.pc() as u32;
-        self.cur_mut().loops.push(LoopCtx {
-            breaks: vec![],
-            continues: vec![],
-        });
+        self.cur_mut().loops.push(LoopCtx { breaks: vec![], continues: vec![] });
         self.block(false);
         let ctx = self.cur_mut().loops.pop().unwrap();
         let cond_pc = self.pc() as u32;
@@ -583,16 +536,7 @@ impl Compiler<'_> {
         };
 
         // The loop variable: an existing INTEGER variable, or declared implicitly.
-        let existing = self
-            .cur()
-            .locals
-            .iter()
-            .find(|l| l.name == name && !l.hidden)
-            .map(|l| (VarLoc::Local(l.slot), l.byref))
-            .or_else(|| match self.names.get(&name) {
-                Some(Name::Var(g)) => Some((VarLoc::Global(*g), false)),
-                _ => None,
-            });
+        let existing = self.lookup_var(&name).map(|v| (v, self.var(v).byref));
         let var = match existing {
             Some((_, true)) => {
                 self.error(
@@ -603,16 +547,13 @@ impl Compiler<'_> {
                 self.hidden_var("for", Ty::Int, name_span)
             }
             Some((v, false)) => {
-                let ty = self.var_ty(v);
+                let ty = self.var(v).ty.clone();
                 if !matches!(ty, Ty::Int | Ty::Error) {
                     let tn = self.ty_name(&ty);
                     self.error(
-                        Diagnostic::error(
-                            "E0300",
-                            format!("FOR loop counter `{name}` must be INTEGER"),
-                        )
-                        .primary(name_span, format!("`{name}` has type `{tn}`"))
-                        .secondary(self.var_decl_span(v), "declared here"),
+                        Diagnostic::error("E0300", format!("FOR loop counter `{name}` must be INTEGER"))
+                            .primary(name_span, format!("`{name}` has type `{tn}`"))
+                            .secondary(self.var(v).span, "declared here"),
                     );
                 }
                 v
@@ -628,11 +569,7 @@ impl Compiler<'_> {
             self.error(
                 Diagnostic::error("E0100", "expected `←` after the FOR loop counter")
                     .primary(self.tok.span, "found `=`")
-                    .suggest(
-                        self.tok.span,
-                        "←",
-                        "FOR loops assign the start value with `←`",
-                    ),
+                    .suggest(self.tok.span, "←", "FOR loops assign the start value with `←`"),
             );
             self.advance();
         } else {
@@ -661,30 +598,12 @@ impl Compiler<'_> {
         let step_var = self.hidden_var("for step", Ty::Int, for_span);
         self.store_var(step_var, for_span);
 
-        let check = self.emit(
-            Op::ForCheck {
-                var,
-                end: end_var,
-                step: step_var,
-                exit: 0,
-            },
-            for_span,
-        );
-        self.cur_mut().loops.push(LoopCtx {
-            breaks: vec![],
-            continues: vec![],
-        });
+        let check = self.emit(Op::ForCheck { var, end: end_var, step: step_var, exit: 0 }, for_span);
+        self.cur_mut().loops.push(LoopCtx { breaks: vec![], continues: vec![] });
         self.block(false);
         let ctx = self.cur_mut().loops.pop().unwrap();
         let step_pc = self.pc() as u32;
-        self.emit(
-            Op::ForStep {
-                var,
-                step: step_var,
-                back: check as u32,
-            },
-            for_span,
-        );
+        self.emit(Op::ForStep { var, step: step_var, back: check as u32 }, for_span);
         self.patch_jump(check);
         self.finish_loop(ctx, step_pc);
 
@@ -695,16 +614,10 @@ impl Compiler<'_> {
             self.advance();
             if next_name != name {
                 self.error(
-                    Diagnostic::error(
-                        "E0204",
-                        format!("`NEXT {next_name}` does not match `FOR {name}`"),
-                    )
-                    .primary(span, format!("expected `{name}`"))
-                    .secondary(
-                        name_span,
-                        "the innermost FOR loop counts with this variable",
-                    )
-                    .suggest(span, name.clone(), "use the loop's own counter"),
+                    Diagnostic::error("E0204", format!("`NEXT {next_name}` does not match `FOR {name}`"))
+                        .primary(span, format!("expected `{name}`"))
+                        .secondary(name_span, "the innermost FOR loop counts with this variable")
+                        .suggest(span, name.clone(), "use the loop's own counter"),
                 );
             }
         }
@@ -712,9 +625,7 @@ impl Compiler<'_> {
 
     fn int_operand(&mut self, e: &Expr, what: &str) {
         if !self.convert_top(&Ty::Int, &e.ty, e.span) {
-            let d = self
-                .mismatch(&Ty::Int, &e.ty, e.span)
-                .note(format!("{what} must be an INTEGER"));
+            let d = self.mismatch(&Ty::Int, &e.ty, e.span).note(format!("{what} must be an INTEGER"));
             self.error(d);
         }
     }
@@ -723,9 +634,8 @@ impl Compiler<'_> {
         let span = self.tok.span;
         self.advance();
         self.cur_mut().saw_return = true;
-        let has_value = !self.tok.line_start
-            && !self.at(Tok::Eof)
-            && !matches!(self.tok.tok, Tok::Kw(k) if k.is_block_end());
+        let has_value =
+            !self.tok.line_start && !self.at(Tok::Eof) && !matches!(self.tok.tok, Tok::Kw(k) if k.is_block_end());
         if self.cur().is_main() {
             self.error(
                 Diagnostic::error("E0206", "RETURN outside of a PROCEDURE or FUNCTION")
@@ -750,10 +660,9 @@ impl Compiler<'_> {
                 let e = self.expr();
                 if !self.convert_top(&ty, &e.ty, e.span) {
                     let tn = self.ty_name(&ty);
-                    let d = self.mismatch(&ty, &e.ty, e.span).secondary(
-                        ret_span,
-                        format!("expected `{tn}` because of this return type"),
-                    );
+                    let d = self
+                        .mismatch(&ty, &e.ty, e.span)
+                        .secondary(ret_span, format!("expected `{tn}` because of this return type"));
                     self.error(d);
                 }
                 self.emit(Op::Return, span);
@@ -784,16 +693,8 @@ impl Compiler<'_> {
         }
         let j = self.emit(Op::Jump(0), span);
         let ctx = self.cur_mut().loops.last_mut().unwrap();
-        if k == Kw::Break {
-            ctx.breaks.push(j)
-        } else {
-            ctx.continues.push(j)
-        }
+        if k == Kw::Break { ctx.breaks.push(j) } else { ctx.continues.push(j) }
     }
-
-    // -----------------------------------------------------------------------
-    // Input / output
-    // -----------------------------------------------------------------------
 
     fn output_stmt(&mut self) {
         let span = self.tok.span;
@@ -828,11 +729,8 @@ impl Compiler<'_> {
             None => {
                 if e.ty != Ty::Error {
                     self.error(
-                        Diagnostic::error(
-                            "E0309",
-                            format!("{what} needs a variable to store into"),
-                        )
-                        .primary(e.span, "not a variable"),
+                        Diagnostic::error("E0309", format!("{what} needs a variable to store into"))
+                            .primary(e.span, "not a variable"),
                     );
                 }
                 None
@@ -867,9 +765,7 @@ impl Compiler<'_> {
     fn file_name(&mut self, what: &str) -> Expr {
         let e = self.expr();
         if !matches!(e.ty, Ty::Str | Ty::Unknown | Ty::Error) {
-            let d = self
-                .mismatch(&Ty::Str, &e.ty, e.span)
-                .note(format!("{what} takes the file name as a STRING"));
+            let d = self.mismatch(&Ty::Str, &e.ty, e.span).note(format!("{what} takes the file name as a STRING"));
             self.error(d);
         }
         e
@@ -886,9 +782,8 @@ impl Compiler<'_> {
             Tok::Kw(Kw::Append) => FileMode::Append,
             Tok::Kw(Kw::Random) => FileMode::Random,
             _ => {
-                let d = self
-                    .expected_error("a file mode", "after FOR")
-                    .help("valid modes: READ, WRITE, APPEND, RANDOM");
+                let d =
+                    self.expected_error("a file mode", "after FOR").help("valid modes: READ, WRITE, APPEND, RANDOM");
                 self.parse_error(d);
                 return;
             }
