@@ -1,7 +1,8 @@
 # pseudo
 
 A compiler and virtual machine for Cambridge-style pseudocode, written in Rust
-with no dependencies.
+with no dependencies. A TypeScript port in [`web/`](#browser-version-web)
+runs the same language entirely in the browser.
 
 ```
 $ pseudo examples/shapes.pseudo
@@ -172,3 +173,52 @@ pseudo (cli) ──► pseudo-compiler ──► pseudo-core
 
 Build with `cargo build --release`, test with `cargo test --workspace`, and
 run with `cargo run -- examples/shapes.pseudo`.
+
+## Browser version (`web/`)
+
+A TypeScript port of the whole pipeline (lexer, single-pass compiler, VM,
+diagnostics and `explain` texts) that runs client-side, plus a playground
+page. It is built with [Deno](https://deno.com), [Effect](https://effect.website)
+and [RxJS](https://rxjs.dev), and mirrors the Rust crates file for file:
+`src/core`, `src/compiler`, `src/vm`.
+
+```
+cd web
+deno task test      # end-to-end tests (the Rust cli.rs suite, plus REPL/async input/interruption)
+deno task dev       # build dist/ and serve the playground on http://localhost:8000
+deno task build     # dist/index.html + main.js, and dist/playground.html as one self-contained file
+deno task run run ../examples/shapes.pseudo   # the same CLI as the Rust binary (run/check/disasm/tokens/explain/repl)
+```
+
+**Effect** models running a program. I/O is a set of services
+(`Console`, `Stdin`, `Files`, `VmConfig`), so the same `runSource` effect runs
+against the page, a terminal, or in-memory test fixtures (`memoryIo`).
+Compile and run-time errors are typed failures (`CompileError`,
+`RuntimeFailure`). The VM is resumable: it runs in slices and yields to the
+event loop between them. `INPUT` suspends the fiber until the user answers,
+and the Stop button interrupts the fiber.
+
+**RxJS** drives the page: edits re-highlight immediately, a debounced
+stream type-checks, and the cursor stream shows the diagnostic under the
+caret. The bytecode view only renders while its tab is visible.
+
+**The playground** includes:
+- an editor highlighted by the compiler's own lexer, with squiggles, typing `<-` for `←` and auto-indent;
+- a Problems tab of rustc-style diagnostics with `explain` texts;
+- a console with inline `INPUT`;
+- a utop-style REPL with `- : TYPE = value` echoes, multi-line blocks, history, Tab completion and a live type hint;
+- a disassembly that jumps to source;
+- inline-cache statistics;
+- an editable virtual file system for `OPENFILE`.
+
+`Session` implements the REPL. The compiler is deterministic, so each input
+recompiles the transcript and the VM resumes from the previous `HALT` with
+its globals and warm caches.
+
+Differences from the Rust build:
+- `INTEGER` is a JavaScript number, so integers are exact up to 2^53 − 1 rather than 2^63 − 1.
+- Files live in memory; the playground saves them to `localStorage`.
+- It runs about 5× slower: `examples/bench.pseudo` (22.1 M instructions) takes about 1.4 s, against 0.27 s for the Rust release build.
+
+Apart from the integer range and the `explain` hint wording, programs produce the
+same output and diagnostics as the Rust build.
