@@ -111,11 +111,11 @@ export class Vm {
   private caches: InlineCache[] = [];
   private fieldCaches: ({ shape: number; slot: number } | undefined)[] = [];
   private readonly globalCache: ([number, number, MethodMeta] | undefined)[] = new Array(GLOBAL_CACHE_SIZE);
-  private pendingInput: Conv | undefined;
+  /** The type INPUT is waiting for, while the program is suspended on INPUT. */
+  awaitingInput: Conv | undefined;
   private output: string[] = [];
   private echoes: Echo[] = [];
   readonly files: FileTable;
-  readonly fs: VirtualFs;
   readonly random: () => number;
   readonly today: () => number;
   readonly stats: Stats = {
@@ -131,8 +131,7 @@ export class Vm {
   };
 
   constructor(public program: Program, private readonly host: VmHost = {}) {
-    this.fs = host.fs ?? new VirtualFs();
-    this.files = new FileTable(this.fs);
+    this.files = new FileTable(host.fs ?? new VirtualFs());
     this.random = host.random ?? xorshift(host.seed ?? Date.now());
     this.today = host.today ?? (() => Math.floor(Date.now() / 86_400_000));
     this.start(program, 0);
@@ -152,7 +151,7 @@ export class Vm {
     this.stack = [];
     for (let i = 0; i < program.main.numSlots; i++) this.stack.push(UNINIT);
     this.frames = [{ proto: program.main, ip: from, base: 0, ctor: false }];
-    this.pendingInput = undefined;
+    this.awaitingInput = undefined;
   }
 
   /** Lines written by OUTPUT since the last call. */
@@ -167,11 +166,6 @@ export class Vm {
     const e = this.echoes;
     this.echoes = [];
     return e;
-  }
-
-  /** The type INPUT is waiting for, if the program is suspended on INPUT. */
-  get awaitingInput(): Conv | undefined {
-    return this.pendingInput;
   }
 
   /** Name, type and current value of every user-visible global. */
@@ -305,7 +299,7 @@ export class Vm {
     return v;
   }
 
-  popStr(): string {
+  private popStr(): string {
     const v = this.stack.pop()!;
     if (typeof v === "string") return v;
     if (v instanceof Char) return v.c;
@@ -368,7 +362,7 @@ export class Vm {
   }
 
   private uninitLocal(proto: Proto, slot: number): Fault {
-    const l = proto.localName(slot);
+    const l = proto.localAt(slot);
     if (!l) return new Fault("R0002", "use of uninitialized variable", "read before assignment");
     return new Fault(
       "R0002",
@@ -549,9 +543,9 @@ export class Vm {
 
   /** Supply the line an INPUT instruction is waiting for. Throws {@link RuntimeError} if it does not parse. */
   provideInput(text: string): void {
-    const conv = this.pendingInput;
+    const conv = this.awaitingInput;
     if (conv === undefined) throw new Error("the VM is not waiting for input");
-    this.pendingInput = undefined;
+    this.awaitingInput = undefined;
     try {
       this.stack.push(parseAs(text, conv));
     } catch (e) {
@@ -561,7 +555,7 @@ export class Vm {
 
   /** The input stream ended while INPUT was waiting. */
   inputEnded(): never {
-    this.pendingInput = undefined;
+    this.awaitingInput = undefined;
     throw this.locate(new Fault("R0006", "no more input", "INPUT reached the end of the input stream"));
   }
 
@@ -993,9 +987,8 @@ export class Vm {
             break;
           }
           case Op.Input:
-            this.pendingInput = ins.a;
+            this.awaitingInput = ins.a;
             frame.ip = ip;
-            this.stats.instructions += executed;
             return { tag: "input" };
           case Op.OpenFile:
             this.files.openFile(this.popStr(), ins.a as FileMode);
@@ -1236,7 +1229,7 @@ function refEquals(a: Ref, b: Ref): boolean {
   return true;
 }
 
-export function valuesEqual(a: Value, b: Value): boolean {
+function valuesEqual(a: Value, b: Value): boolean {
   if (a instanceof Obj && b instanceof Obj) {
     if (!a.record || !b.record) return a === b;
     return a.shape === b.shape && a.fields.every((f, i) => valuesEqual(f, b.fields[i]));
@@ -1251,7 +1244,7 @@ export function valuesEqual(a: Value, b: Value): boolean {
 }
 
 /** Ordering of two values (negative, zero, positive), or undefined if they are not comparable. */
-export function compare(a: Value, b: Value): number | undefined {
+function compare(a: Value, b: Value): number | undefined {
   const x = asReal(a), y = asReal(b);
   if (x !== undefined && y !== undefined) return x < y ? -1 : x > y ? 1 : x === y ? 0 : undefined;
   const text = (v: Value) => (typeof v === "string" ? v : v instanceof Char ? v.c : undefined);

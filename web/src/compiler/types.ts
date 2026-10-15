@@ -26,8 +26,6 @@ export const T = {
   Error: { k: "error" },
 } as const satisfies Record<string, Ty>;
 
-export const arrayTy = (dims: (readonly [number, number])[], elem: Ty): Ty => ({ k: "array", dims, elem });
-
 export function tyEquals(a: Ty, b: Ty): boolean {
   if (a.k !== b.k) return false;
   switch (a.k) {

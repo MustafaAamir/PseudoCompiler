@@ -5,16 +5,16 @@
 
 import type { Source, Span } from "./source.ts";
 
-export type Severity = "error" | "warning";
+type Severity = "error" | "warning";
 
-export interface Label {
+interface Label {
   readonly span: Span;
   readonly message: string;
   readonly primary: boolean;
 }
 
 /** A trailing `note:`/`help:`. With a span it gets its own snippet; with a replacement it is a suggested edit. */
-export interface Child {
+interface Child {
   readonly kind: "note" | "help";
   readonly message: string;
   readonly span?: Span;
@@ -76,19 +76,14 @@ export class Diagnostic {
 }
 
 /** The diagnostics produced by one compilation. */
+/** The plural suffix for a count. */
+export const plural = (n: number): string => (n === 1 ? "" : "s");
+
 export class Diagnostics {
   readonly list: Diagnostic[] = [];
 
   push(d: Diagnostic): void {
     this.list.push(d);
-  }
-
-  get errorCount(): number {
-    return this.list.filter((d) => d.isError).length;
-  }
-
-  get warningCount(): number {
-    return this.list.length - this.errorCount;
   }
 
   get hasErrors(): boolean {
@@ -151,8 +146,7 @@ export class Renderer {
 
   render(d: Diagnostic): string {
     const out: string[] = [];
-    const sevStyle: Style = d.severity;
-    this.heading(out, `${d.severity}[${d.code}]`, sevStyle, d.message);
+    this.heading(out, `${d.severity}[${d.code}]`, d.severity, d.message);
 
     const gutter = this.gutterWidth(d);
     const primary = d.primarySpan() ?? d.labels[0]?.span;
@@ -160,7 +154,7 @@ export class Renderer {
       this.location(out, primary, gutter);
       this.snippet(
         out,
-        d.labels.map((l) => [l.span, l.message, l.primary ? sevStyle : "secondary"] as const),
+        d.labels.map((l) => [l.span, l.message, l.primary ? d.severity : "secondary"] as const),
         gutter,
       );
     }
@@ -280,15 +274,15 @@ export class Renderer {
   }
 
   /** The closing `error: could not compile ...` summary. */
-  summary(diags: Diagnostics): string {
-    const plural = (n: number) => (n === 1 ? "" : "s");
-    const { errorCount: e, warningCount: w } = diags;
+  summary(diags: readonly Diagnostic[]): string {
+    const e = diags.filter((d) => d.isError).length;
+    const w = diags.length - e;
     const out: string[] = [];
     const name = this.src.name;
     if (w > 0) this.heading(out, "warning", "warning", `\`${name}\` generated ${w} warning${plural(w)}`);
     if (e > 0) {
       this.heading(out, "error", "error", `could not compile \`${name}\` due to ${e} previous error${plural(e)}`);
-      const first = diags.sorted().find((d) => d.isError);
+      const first = diags.find((d) => d.isError);
       if (first) out.push(this.paint(`For more information about an error, try \`explain ${first.code}\`.`, "bold"));
     }
     return out.length ? out.join("\n") + "\n" : "";
@@ -329,7 +323,7 @@ class Canvas {
 // ---------------------------------------------------------------------------
 
 /** Optimal string alignment distance (Levenshtein + adjacent transpositions). */
-export function editDistance(a: string, b: string): number {
+function editDistance(a: string, b: string): number {
   const x = [...a], y = [...b];
   const d = Array.from(
     { length: x.length + 1 },

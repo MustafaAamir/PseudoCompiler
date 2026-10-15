@@ -13,6 +13,7 @@
 
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import {
+  compile,
   type CompileError,
   Console,
   explain,
@@ -27,7 +28,6 @@ import {
   VirtualFs,
   VmConfig,
 } from "./mod.ts";
-import { compile } from "./compiler/mod.ts";
 
 const args = Deno.args.filter((a) => !a.startsWith("--"));
 const flags = new Set(Deno.args.filter((a) => a.startsWith("--")));
@@ -49,12 +49,14 @@ async function* stdinLines(): AsyncGenerator<string> {
   if (buf) yield buf;
 }
 const lines = stdinLines();
-const nextLine = () =>
-  Effect.promise(() => lines.next()).pipe(Effect.map((r) => (r.done ? Option.none() : Option.some(r.value))));
+const renderer = (src: Source) => new Renderer(src, color ? "ansi" : "plain");
 
 const terminal = Layer.mergeAll(
   Layer.succeed(Console, { print: (line) => Effect.sync(() => console.log(line)) }),
-  Layer.succeed(Stdin, { readLine: () => nextLine() }),
+  Layer.succeed(Stdin, {
+    readLine: () =>
+      Effect.promise(() => lines.next()).pipe(Effect.map((r) => (r.done ? Option.none() : Option.some(r.value)))),
+  }),
   Layer.succeed(Files, new VirtualFs()),
   Layer.succeed(VmConfig, {
     sliceSize: 1_000_000,
@@ -64,11 +66,10 @@ const terminal = Layer.mergeAll(
 );
 
 function report(e: CompileError | RuntimeFailure): number {
-  const r = new Renderer(e.source, color ? "ansi" : "plain");
+  const r = renderer(e.source);
   if (e._tag === "CompileError") {
     for (const d of e.diagnostics) err(r.render(d) + "\n");
-    const { diagnostics } = compile(e.source);
-    err(r.summary(diagnostics));
+    err(r.summary(e.diagnostics));
     return 1;
   }
   err(r.render(e.error.toDiagnostic()) + "\n");
@@ -106,9 +107,10 @@ async function main(): Promise<number> {
     case "disasm": {
       const src = await read(arg);
       const { program, diagnostics } = compile(src);
-      const r = new Renderer(src, color ? "ansi" : "plain");
-      for (const d of diagnostics.sorted()) err(r.render(d) + "\n");
-      err(r.summary(diagnostics));
+      const r = renderer(src);
+      const sorted = diagnostics.sorted();
+      for (const d of sorted) err(r.render(d) + "\n");
+      err(r.summary(sorted));
       if (!program) return 1;
       if (cmd === "disasm") console.log(program.disassemble(src));
       else err(`\`${src.name}\` type-checks successfully\n`);
@@ -122,7 +124,7 @@ async function main(): Promise<number> {
       const src = await read(cmd === "run" ? arg : cmd);
       const exit = await Effect.runPromiseExit(runSource(src).pipe(Effect.provide(terminal)));
       if (Exit.isSuccess(exit)) {
-        const r = new Renderer(src, color ? "ansi" : "plain");
+        const r = renderer(src);
         for (const d of exit.value.diagnostics.sorted()) err(r.render(d) + "\n");
         if (flags.has("--stats")) err(exit.value.vm.report() + "\n");
         return 0;

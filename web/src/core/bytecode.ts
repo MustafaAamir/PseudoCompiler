@@ -153,7 +153,6 @@ export function instr(op: Op, a = 0, b = 0, c = 0, d = 0): Instr {
 
 /** A variable location packed in one number: locals are slots `>= 0`, globals are `-(index + 1)`. */
 export type VarLoc = number;
-export const local = (slot: number): VarLoc => slot;
 export const global = (index: number): VarLoc => -(index + 1);
 export const isGlobal = (v: VarLoc): boolean => v < 0;
 export const globalIndex = (v: VarLoc): number => -v - 1;
@@ -185,7 +184,7 @@ export class Proto {
 
   constructor(public name: string, public kind: ProtoKind, public decl: Span) {}
 
-  localName(slot: number): LocalInfo | undefined {
+  localAt(slot: number): LocalInfo | undefined {
     return this.locals.find((l) => l.slot === slot);
   }
 }
@@ -247,7 +246,7 @@ export class Program {
     readonly numSites: number,
   ) {}
 
-  describeConst(v: Value): string {
+  private describeConst(v: Value): string {
     if (typeof v === "string") return JSON.stringify(v);
     if (typeof v === "number") return String(v);
     if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
@@ -307,9 +306,9 @@ export class Program {
     out.push("");
   }
 
-  varName(p: Proto, v: VarLoc): string {
+  private varName(p: Proto, v: VarLoc): string {
     if (isGlobal(v)) return `g${globalIndex(v)}(${this.globals[globalIndex(v)].name})`;
-    const l = p.localName(v);
+    const l = p.localAt(v);
     return l ? `%${v}(${l.name})` : `%${v}`;
   }
 

@@ -49,10 +49,6 @@ export class RuntimeError extends Error {
     this.name = "RuntimeError";
   }
 
-  get code(): string {
-    return this.fault.code;
-  }
-
   toDiagnostic(): Diagnostic {
     const f = this.fault;
     const d = Diagnostic.error(f.code, `run-time error: ${f.message}`).primary(this.span, f.label);

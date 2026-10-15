@@ -14,14 +14,13 @@
  */
 
 import { Context, Data, Effect, Layer, Option } from "effect";
-import type { Program } from "./core/bytecode.ts";
+import { Op, type Program } from "./core/bytecode.ts";
 import type { Diagnostic, Diagnostics } from "./core/diag.ts";
 import { Source } from "./core/source.ts";
 import { compile } from "./compiler/mod.ts";
 import { RuntimeError } from "./vm/fault.ts";
 import { VirtualFs } from "./vm/files.ts";
-import { type Echo, Vm } from "./vm/vm.ts";
-import { Conv, Op } from "./core/bytecode.ts";
+import { convName, type Echo, Vm, type VmHost } from "./vm/vm.ts";
 
 export class Console extends Context.Tag("pseudo/Console")<Console, {
   readonly print: (line: string) => Effect.Effect<void>;
@@ -39,17 +38,12 @@ export class Stdin extends Context.Tag("pseudo/Stdin")<Stdin, {
 
 export class Files extends Context.Tag("pseudo/Files")<Files, VirtualFs>() {}
 
-export interface VmSettings {
+export interface VmSettings extends Omit<VmHost, "fs"> {
   /** Instructions executed between yields to the host. */
   readonly sliceSize: number;
-  readonly seed?: number;
-  readonly today?: () => number;
-  readonly trace?: (line: string) => void;
 }
 
-export class VmConfig extends Context.Tag("pseudo/VmConfig")<VmConfig, VmSettings>() {
-  static readonly Default = Layer.succeed(VmConfig, { sliceSize: 200_000 });
-}
+export class VmConfig extends Context.Tag("pseudo/VmConfig")<VmConfig, VmSettings>() {}
 
 export class CompileError extends Data.TaggedError("CompileError")<{
   readonly source: Source;
@@ -64,10 +58,9 @@ export class RuntimeFailure extends Data.TaggedError("RuntimeFailure")<{
 /** Compile, failing with every diagnostic if there are errors. Warnings are returned on success. */
 export const compileSource = (
   source: Source,
-  repl = false,
 ): Effect.Effect<{ program: Program; diagnostics: Diagnostics }, CompileError> =>
   Effect.suspend(() => {
-    const { program, diagnostics } = compile(source, { repl });
+    const { program, diagnostics } = compile(source);
     return program
       ? Effect.succeed({ program, diagnostics })
       : Effect.fail(new CompileError({ source, diagnostics: diagnostics.sorted() }));
@@ -84,8 +77,6 @@ const guard = <A>(source: Source, f: () => A): Effect.Effect<A, RuntimeFailure> 
     }
   });
 
-const INPUT_TYPES = ["INTEGER", "REAL", "BOOLEAN", "CHAR", "STRING", "DATE", "STRING"];
-
 /** Run a VM (already positioned with `start`) to completion, yielding to the host between time slices. */
 export const drive = (vm: Vm, source: Source): Effect.Effect<void, RuntimeFailure, Console | Stdin | VmConfig> =>
   Effect.gen(function* () {
@@ -99,8 +90,7 @@ export const drive = (vm: Vm, source: Source): Effect.Effect<void, RuntimeFailur
         yield* flush;
         if (step.tag === "halt") return;
         if (step.tag === "input") {
-          const type = INPUT_TYPES[vm.awaitingInput ?? Conv.Str];
-          const line = yield* stdin.readLine({ type });
+          const line = yield* stdin.readLine({ type: convName(vm.awaitingInput!) });
           yield* guard(source, () => (Option.isSome(line) ? vm.provideInput(line.value) : vm.inputEnded()));
         } else {
           // A macrotask boundary: the page can repaint and a Stop button can interrupt us here.
@@ -112,7 +102,6 @@ export const drive = (vm: Vm, source: Source): Effect.Effect<void, RuntimeFailur
   });
 
 export interface RunResult {
-  readonly program: Program;
   readonly diagnostics: Diagnostics;
   readonly vm: Vm;
 }
@@ -123,16 +112,10 @@ export const runSource = (
 ): Effect.Effect<RunResult, CompileError | RuntimeFailure, Console | Stdin | Files | VmConfig> =>
   Effect.gen(function* () {
     const { program, diagnostics } = yield* compileSource(source);
-    const fs = yield* Files;
-    const cfg = yield* VmConfig;
-    const vm = new Vm(program, { fs, seed: cfg.seed, today: cfg.today, trace: cfg.trace });
+    const vm = new Vm(program, { fs: yield* Files, ...yield* VmConfig });
     yield* drive(vm, source);
-    return { program, diagnostics, vm };
+    return { diagnostics, vm };
   });
-
-// ---------------------------------------------------------------------------
-// Interactive sessions
-// ---------------------------------------------------------------------------
 
 export interface SubmitResult {
   /** `- : INTEGER = 42` style results of expressions and assignments. */
@@ -157,16 +140,8 @@ export class Session {
 
   constructor(private readonly name = "repl") {}
 
-  get source(): Source {
-    return new Source(this.name, this.transcript);
-  }
-
   get currentProgram(): Program | undefined {
     return this.program;
-  }
-
-  get machine(): Vm | undefined {
-    return this.vm;
   }
 
   /** Start from scratch, forgetting all variables and definitions. */
@@ -176,25 +151,25 @@ export class Session {
     this.vm = undefined;
   }
 
-  /** Compile only: diagnostics `input` would produce, without running anything. */
-  check(input: string): { diagnostics: readonly Diagnostic[]; source: Source; echoTypes: readonly string[] } {
-    const text = this.transcript + input + "\n";
-    const source = new Source(this.name, text);
-    const { program, diagnostics } = compile(source, { repl: true });
+  /** The transcript extended with `input`, compiled; diagnostics are only those about `input`. */
+  private compileWith(input: string): { source: Source; program?: Program; diagnostics: Diagnostic[] } {
     const offset = this.transcript.length;
-    const echoTypes: string[] = [];
-    if (program) {
-      const main = program.main;
-      for (let i = this.haltIndex(); i < main.code.length; i++) {
-        const ins = main.code[i];
-        if (ins.op === Op.Echo) echoTypes.push(String(main.consts[ins.b]));
-      }
-    }
+    const source = new Source(this.name, this.transcript + input + "\n");
+    const { program, diagnostics } = compile(source, { repl: true });
     return {
-      diagnostics: diagnostics.sorted().filter((d) => (d.primarySpan()?.start ?? offset) >= offset),
       source,
-      echoTypes,
+      program,
+      diagnostics: diagnostics.sorted().filter((d) => (d.primarySpan()?.start ?? offset) >= offset),
     };
+  }
+
+  /** Compile only: what `input` would report, and the types of the values it would print. */
+  check(input: string): { diagnostics: readonly Diagnostic[]; echoTypes: readonly string[] } {
+    const { program, diagnostics } = this.compileWith(input);
+    const code = program?.main.code ?? [];
+    const echoTypes = code.slice(this.haltIndex()).filter((ins) => ins.op === Op.Echo)
+      .map((ins) => String(program!.main.consts[ins.b]));
+    return { diagnostics, echoTypes };
   }
 
   private haltIndex(): number {
@@ -205,27 +180,20 @@ export class Session {
     input: string,
   ): Effect.Effect<SubmitResult, CompileError | RuntimeFailure, Console | Stdin | Files | VmConfig> {
     return Effect.gen(this, function* () {
-      const offset = this.transcript.length;
-      const text = this.transcript + input + "\n";
-      const source = new Source(this.name, text);
-      const { program, diagnostics } = compile(source, { repl: true });
-      const fresh = diagnostics.sorted().filter((d) => (d.primarySpan()?.start ?? offset) >= offset);
+      const { source, program, diagnostics } = this.compileWith(input);
       if (!program) {
-        return yield* Effect.fail(new CompileError({ source, diagnostics: fresh.filter((d) => d.isError) }));
+        return yield* Effect.fail(new CompileError({ source, diagnostics: diagnostics.filter((d) => d.isError) }));
       }
-
       const previous = this.program;
       const from = this.haltIndex();
-      const fs = yield* Files;
-      const cfg = yield* VmConfig;
       // Accept the input before running it: definitions stay even if it fails at run time.
-      this.transcript = text;
+      this.transcript = source.text;
       this.program = program;
       let vm = this.vm;
       if (vm) vm.start(program, from);
-      else vm = this.vm = new Vm(program, { fs, seed: cfg.seed, today: cfg.today, trace: cfg.trace });
+      else vm = this.vm = new Vm(program, { fs: yield* Files, ...yield* VmConfig });
       yield* drive(vm, source);
-      return { echoes: vm.takeEchoes(), declared: declarations(previous, program), warnings: fresh, source };
+      return { echoes: vm.takeEchoes(), declared: declarations(previous, program), warnings: diagnostics, source };
     });
   }
 }
@@ -246,26 +214,20 @@ function declarations(prev: Program | undefined, next: Program): string[] {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// In-memory I/O, for tests and headless use
-// ---------------------------------------------------------------------------
-
 export interface MemoryIo {
   readonly layer: Layer.Layer<Console | Stdin | Files | VmConfig>;
   readonly output: string[];
-  readonly fs: VirtualFs;
 }
 
 /** I/O services backed by arrays: `inputs` feed INPUT, OUTPUT lines are collected in `output`. */
 export function memoryIo(inputs: readonly string[] = [], settings: Partial<VmSettings> = {}): MemoryIo {
   const output: string[] = [];
   const queue = [...inputs];
-  const fs = new VirtualFs();
   const layer = Layer.mergeAll(
     Layer.succeed(Console, { print: (line) => Effect.sync(() => void output.push(line)) }),
     Layer.succeed(Stdin, { readLine: () => Effect.sync(() => Option.fromNullable(queue.shift())) }),
-    Layer.succeed(Files, fs),
+    Layer.succeed(Files, new VirtualFs()),
     Layer.succeed(VmConfig, { sliceSize: 200_000, seed: 42, ...settings }),
   );
-  return { layer, output, fs };
+  return { layer, output };
 }

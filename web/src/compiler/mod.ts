@@ -19,5 +19,3 @@ export function compile(src: Source, options: CompileOptions = {}): { program?: 
   const [prog, diagnostics] = c.finish();
   return { program: prog, diagnostics };
 }
-
-export { describe, isBlockEnd, isKeyword, KEYWORDS, type Kind, Lexer, type Token } from "./lexer.ts";

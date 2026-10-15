@@ -8,25 +8,16 @@
  * Effect services for I/O.
  */
 
-export { type Builtin, BUILTINS, signatureOf } from "./core/builtins.ts";
-export { Op, Program, Proto } from "./core/bytecode.ts";
-export { bestMatch, Diagnostic, Diagnostics, escapeHtml, Renderer, type RenderMode } from "./core/diag.ts";
-export { Source, Span } from "./core/source.ts";
-export {
-  compile,
-  type CompileOptions,
-  describe,
-  isBlockEnd,
-  isKeyword,
-  KEYWORDS,
-  type Kind,
-  Lexer,
-  type Token,
-} from "./compiler/mod.ts";
-export { RuntimeError } from "./vm/fault.ts";
+export { BUILTINS } from "./core/builtins.ts";
+export type { Program } from "./core/bytecode.ts";
+export { Diagnostic, type Diagnostics, escapeHtml, Renderer, type RenderMode } from "./core/diag.ts";
+export { Source, type Span } from "./core/source.ts";
+export { compile, type CompileOptions } from "./compiler/mod.ts";
+export { isKeyword, KEYWORDS, type Kind, Lexer, type Token } from "./compiler/lexer.ts";
+export type { RuntimeError } from "./vm/fault.ts";
 export { VirtualFs } from "./vm/files.ts";
-export { type Echo, type SendSite, type Stats, type Step, Vm, type VmHost } from "./vm/vm.ts";
-export { explain, EXPLANATIONS } from "./explain.ts";
+export { type Echo, type SendSite, type Stats, Vm, type VmHost } from "./vm/vm.ts";
+export { explain } from "./explain.ts";
 export {
   CompileError,
   compileSource,

@@ -1,74 +1,96 @@
 <title>Pseudo Workbench</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description"
-  content="Compile and run Cambridge-style pseudocode in the browser, with rustc-style diagnostics and an interactive REPL.">
+<meta name="description" content="Compile and run Cambridge-style pseudocode in the browser.">
+<link rel="icon"
+  href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230a0a0a'/%3E%3Cpath d='M12 8H4m3-3L4 8l3 3' stroke='%23fff' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet"
-  href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,700&display=swap">
+  href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap">
 <!--STYLE-->
 
 <div class="app">
-  <header class="bar">
-    <h1 class="brand"><span class="brand-arrow">←</span> Pseudo Workbench</h1>
-    <div class="bar-controls">
-      <label class="visually-hidden" for="example">Load an example</label>
-      <select id="example" title="Load an example program"></select>
-      <button id="run" class="primary" type="button" title="Run (Ctrl+Enter)">Run</button>
-      <button id="stop" type="button" title="Stop the running program (Esc)" disabled>Stop</button>
+  <header class="masthead">
+    <div class="mark">PSEUDO<i>/</i>WB</div>
+    <div class="meta">
+      <span>Pseudocode compiler + bytecode VM</span>
+      <span>Single-pass · inline-cached sends · resumable</span>
     </div>
-    <div id="run-state" class="run-state" role="status" aria-live="polite">Ready</div>
+    <dl class="readout">
+      <div>
+        <dt>Status</dt>
+        <dd id="run-state">Ready</dd>
+      </div>
+      <div>
+        <dt>Time</dt>
+        <dd id="run-time">—</dd>
+      </div>
+      <div>
+        <dt>Instr</dt>
+        <dd id="run-instr">—</dd>
+      </div>
+    </dl>
   </header>
 
+  <div class="toolbar">
+    <label for="example">Load</label>
+    <select id="example"></select>
+    <button id="run" class="primary" type="button" title="Run (Ctrl+Enter)">Run <kbd>⌃↵</kbd></button>
+    <button id="stop" type="button" title="Stop (Esc)" disabled>Stop <kbd>Esc</kbd></button>
+    <span class="grow"></span>
+    <span id="check-summary" class="summary" role="status"></span>
+  </div>
+
   <main class="split">
-    <section class="editor-pane" aria-label="Program">
+    <section class="pane" aria-label="Source">
       <div class="pane-head">
-        <span id="file-name" class="file-name">program.pseudo</span>
-        <span id="check-summary" class="check-summary"></span>
+        <span class="label">Source</span>
+        <span id="file-name"></span>
+        <span class="grow"></span>
+        <span id="line-count" class="dim"></span>
       </div>
       <div class="editor" id="editor">
         <div class="gutter" id="gutter" aria-hidden="true"></div>
-        <div class="code-area">
+        <div class="code">
           <pre class="code-layer" id="code-layer" aria-hidden="true"></pre>
           <textarea id="source" class="code-input" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"
             aria-label="Pseudocode source"></textarea>
         </div>
       </div>
-      <div class="status" id="status">
-        <span id="cursor-pos" class="cursor-pos">1:1</span>
-        <span id="cursor-diag"
-          class="cursor-diag">Type <kbd>&lt;-</kbd> for ←, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to run</span>
+      <div class="statusbar">
+        <span id="cursor-pos">Ln 1, Col 1</span>
+        <span id="cursor-diag" class="dim">Type &lt;- for ←</span>
       </div>
     </section>
 
-    <section class="panel" aria-label="Tools">
-      <nav class="tabs" role="tablist">
-        <button role="tab" data-tab="console" id="tab-console">Console</button>
-        <button role="tab" data-tab="repl" id="tab-repl">REPL</button>
-        <button role="tab" data-tab="problems"
-          id="tab-problems">Problems <span class="count" id="problem-count"></span></button>
-        <button role="tab" data-tab="bytecode" id="tab-bytecode">Bytecode</button>
-        <button role="tab" data-tab="stats" id="tab-stats">Stats</button>
-        <button role="tab" data-tab="files" id="tab-files">Files</button>
-      </nav>
+    <section class="pane" aria-label="Tools">
+      <div class="tabs" role="tablist" aria-label="Tools">
+        <button role="tab" id="tab-console" data-tab="console">Console</button>
+        <button role="tab" id="tab-repl" data-tab="repl">REPL</button>
+        <button role="tab" id="tab-problems"
+          data-tab="problems">Problems<span class="count" id="problem-count"></span></button>
+        <button role="tab" id="tab-bytecode" data-tab="bytecode">Bytecode</button>
+        <button role="tab" id="tab-stats" data-tab="stats">Stats</button>
+        <button role="tab" id="tab-files" data-tab="files">Files</button>
+      </div>
 
       <div class="view" data-view="console" role="tabpanel" aria-labelledby="tab-console">
-        <div class="term" id="console"></div>
+        <div class="term" id="console" aria-live="polite"></div>
       </div>
 
       <div class="view" data-view="repl" role="tabpanel" aria-labelledby="tab-repl" hidden>
-        <div class="term repl-log" id="repl-log"></div>
+        <div class="term" id="repl-log"></div>
         <div class="repl-entry">
-          <span class="repl-prompt" aria-hidden="true">#</span>
+          <span class="prompt" aria-hidden="true">#</span>
           <textarea id="repl-input" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off"
             aria-label="REPL input" placeholder="DECLARE X : INTEGER"></textarea>
         </div>
         <div class="repl-hint" id="repl-hint"></div>
-        <div class="repl-help">
-          <span><kbd>Enter</kbd> run</span><span><kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
-          <span><kbd>Tab</kbd> complete</span><span><kbd>↑</kbd><kbd>↓</kbd> history</span>
-          <span><kbd>Ctrl</kbd>+<kbd>L</kbd> clear</span>
-          <button id="repl-reset" type="button" class="link">Reset session</button>
+        <div class="keys">
+          <span><kbd>↵</kbd> run</span><span><kbd>⇧↵</kbd> newline</span><span><kbd>Tab</kbd> complete</span>
+          <span><kbd>↑↓</kbd> history</span><span><kbd>⌃L</kbd> clear</span><span><kbd>Esc</kbd> interrupt</span>
+          <span class="grow"></span>
+          <button id="repl-reset" type="button" class="text">Reset session</button>
         </div>
       </div>
 
@@ -81,22 +103,25 @@
       </div>
 
       <div class="view" data-view="stats" role="tabpanel" aria-labelledby="tab-stats" hidden>
-        <div id="stats" class="stats"></div>
+        <div class="stats" id="stats"></div>
       </div>
 
       <div class="view" data-view="files" role="tabpanel" aria-labelledby="tab-files" hidden>
         <div class="files">
           <div class="files-side">
-            <ul id="file-list" class="file-list"></ul>
-            <form id="new-file" class="new-file">
-              <label class="visually-hidden" for="new-file-name">New file name</label>
+            <ul class="file-list" id="file-list"></ul>
+            <form class="new-file" id="new-file">
+              <label for="new-file-name" class="sr">New file name</label>
               <input id="new-file-name" placeholder="scores.txt" autocomplete="off" spellcheck="false">
               <button type="submit">Add</button>
             </form>
           </div>
           <div class="file-body">
-            <div
-              class="file-body-head"><span id="file-open-name">No file selected</span><button id="file-delete" type="button" class="link" hidden>Delete</button></div>
+            <div class="pane-head">
+              <span id="file-open-name" class="dim">No file selected</span>
+              <span class="grow"></span>
+              <button id="file-delete" type="button" class="text" hidden>Delete</button>
+            </div>
             <textarea id="file-text" spellcheck="false" wrap="off" aria-label="File contents" disabled></textarea>
           </div>
         </div>
@@ -104,3 +129,4 @@
     </section>
   </main>
 </div>
+<noscript>This page needs JavaScript to compile and run programs.</noscript>

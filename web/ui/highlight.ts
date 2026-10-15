@@ -36,7 +36,7 @@ function tokenClass(kind: Kind, text: string): string | undefined {
 }
 
 /** Token classes, comments included (they live in the gaps between tokens). */
-export function tokenMarks(text: string): Mark[] {
+function tokenMarks(text: string): Mark[] {
   const marks: Mark[] = [];
   const comments = (from: number, to: number) => {
     for (let i = text.indexOf("//", from); i >= 0 && i < to; i = text.indexOf("//", i)) {

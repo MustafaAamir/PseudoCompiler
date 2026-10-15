@@ -125,24 +125,14 @@ function atCaseLabel(c: Compiler): boolean {
   }
 }
 
-export function openBlock(c: Compiler, end: Kw): void {
-  c.openBlocks.push(end);
-}
-
-/** Whether an enclosing (not the innermost) open block accepts `k`. */
+/** Whether a still-open block accepts `k`. */
 function enclosingAccepts(c: Compiler, k: Kind): boolean {
-  return c.openBlocks.slice(0, -1).some((e) =>
-    e === k || (k === "ELSE" && e === "ENDIF") || (k === "OTHERWISE" && e === "ENDCASE")
-  );
+  return c.openBlocks.some((e) => e === k || (k === "ELSE" && e === "ENDIF") || (k === "OTHERWISE" && e === "ENDCASE"));
 }
 
-/** Expect the terminator `end` of a block opened at `openerSpan`. */
+/** Expect the terminator `end` of a block opened at `openerSpan` (and pushed on `openBlocks`). */
 export function closeBlock(c: Compiler, end: Kw, opener: string, openerSpan: Span): void {
-  closeBlockInner(c, end, opener, openerSpan);
   c.openBlocks.pop();
-}
-
-function closeBlockInner(c: Compiler, end: Kw, opener: string, openerSpan: Span): void {
   if (c.eat(end)) return;
   if (c.miscasedKeyword() === end) {
     c.miscasedKeywordError(end);
@@ -177,7 +167,7 @@ export function statement(c: Compiler): boolean {
     c.miscasedKeywordError(kw);
     c.tok = { ...c.tok, kind: kw };
   }
-  if (echoing(c) && atBareExpr(c)) {
+  if (echoing(c) && BARE_EXPR_STARTS.has(c.tok.kind)) {
     echoResult(c, exprDesc(c));
     return false;
   }
@@ -334,11 +324,6 @@ const BARE_EXPR_STARTS = new Set<Kind>([
   "DATE",
 ]);
 
-/** Tokens that can only start an expression, never a statement. */
-function atBareExpr(c: Compiler): boolean {
-  return BARE_EXPR_STARTS.has(c.tok.kind);
-}
-
 function echoResult(c: Compiler, e: Expr): void {
   if (typeof e.call === "number") c.pending[e.call].asStatement = true;
   const d = discharge(c, e);
@@ -424,7 +409,7 @@ function callStmt(c: Compiler): void {
 function ifStmt(c: Compiler): boolean {
   const ifSpan = c.tok.span;
   c.advance();
-  openBlock(c, "ENDIF");
+  c.openBlocks.push("ENDIF");
   condition(c, "IF", ifSpan);
   c.expect("THEN", "after the IF condition");
   let falseJump: number | undefined = c.emit(instr(Op.JumpIfFalse), ifSpan);
@@ -464,7 +449,7 @@ function ifStmt(c: Compiler): boolean {
 function caseStmt(c: Compiler): boolean {
   const caseSpan = c.tok.span;
   c.advance();
-  openBlock(c, "ENDCASE");
+  c.openBlocks.push("ENDCASE");
   c.expect("OF", "after CASE");
   const subject = expr(c);
   const tmp = c.hiddenVar("case subject", subject.ty, caseSpan);
@@ -519,8 +504,11 @@ function caseStmt(c: Compiler): boolean {
   return otherwise && allDiverge;
 }
 
-function pushLoop(c: Compiler): void {
+/** The body of a loop; BREAK and CONTINUE inside it are collected in the result. */
+function loopBody(c: Compiler): LoopCtx {
   c.cur.loops.push({ breaks: [], continues: [] });
+  block(c, false);
+  return c.cur.loops.pop()!;
 }
 
 function finishLoop(c: Compiler, ctx: LoopCtx, continueTarget: number): void {
@@ -531,14 +519,12 @@ function finishLoop(c: Compiler, ctx: LoopCtx, continueTarget: number): void {
 function whileStmt(c: Compiler): void {
   const span = c.tok.span;
   c.advance();
-  openBlock(c, "ENDWHILE");
+  c.openBlocks.push("ENDWHILE");
   const start = c.pc;
   condition(c, "WHILE", span);
   c.eat("DO");
   const exit = c.emit(instr(Op.JumpIfFalse), span);
-  pushLoop(c);
-  block(c, false);
-  const ctx = c.cur.loops.pop()!;
+  const ctx = loopBody(c);
   c.emit(instr(Op.Jump, start), span);
   c.patchJump(exit);
   finishLoop(c, ctx, start);
@@ -548,11 +534,9 @@ function whileStmt(c: Compiler): void {
 function repeatStmt(c: Compiler): void {
   const span = c.tok.span;
   c.advance();
-  openBlock(c, "UNTIL");
+  c.openBlocks.push("UNTIL");
   const start = c.pc;
-  pushLoop(c);
-  block(c, false);
-  const ctx = c.cur.loops.pop()!;
+  const ctx = loopBody(c);
   const condPc = c.pc;
   closeBlock(c, "UNTIL", "REPEAT", span);
   const until = c.prev;
@@ -564,7 +548,7 @@ function repeatStmt(c: Compiler): void {
 function forStmt(c: Compiler): void {
   const forSpan = c.tok.span;
   c.advance();
-  openBlock(c, "NEXT");
+  c.openBlocks.push("NEXT");
   const id = c.expectIdent("after FOR");
   if (!id) {
     c.openBlocks.pop();
@@ -623,9 +607,7 @@ function forStmt(c: Compiler): void {
   c.storeVar(stepVar, forSpan);
 
   const check = c.emit(instr(Op.ForCheck, v, endVar, stepVar, 0), forSpan);
-  pushLoop(c);
-  block(c, false);
-  const ctx = c.cur.loops.pop()!;
+  const ctx = loopBody(c);
   const stepPc = c.pc;
   c.emit(instr(Op.ForStep, v, stepVar, check), forSpan);
   c.patchJump(check);
@@ -735,11 +717,11 @@ function outputStmt(c: Compiler): void {
 }
 
 /** Parse an assignable target for INPUT / READFILE / GETRECORD. */
-function inputTarget(c: Compiler, what: string): [Place, Expr] | undefined {
+function inputTarget(c: Compiler, what: string): (Expr & { place: Place }) | undefined {
   const e = postfix(c);
   if (e.place) {
     if (e.var !== undefined) c.markVar(e.var, false, true);
-    return [e.place, e];
+    return { ...e, place: e.place };
   }
   if (e.ty.k !== "error") {
     c.error(Diagnostic.error("E0309", `${what} needs a variable to store into`).primary(e.span, "not a variable"));
@@ -765,8 +747,8 @@ function inputStmt(c: Compiler): void {
   c.advance();
   const t = inputTarget(c, "INPUT");
   if (!t) return;
-  c.emit(instr(Op.Input, inputConv(c, t[1], "INPUT")), span);
-  emitStore(c, t[0], t[1].span);
+  c.emit(instr(Op.Input, inputConv(c, t, "INPUT")), span);
+  emitStore(c, t.place, t.span);
 }
 
 function fileName(c: Compiler, what: string): Expr {
@@ -808,9 +790,9 @@ function readRecordStmt(c: Compiler, k: "READFILE" | "GETRECORD"): void {
   const t = inputTarget(c, k);
   if (!t) return;
   c.loadVar(tmp, f.span);
-  if (k === "READFILE") c.emit(instr(Op.ReadFile, inputConv(c, t[1], "READFILE")), span);
+  if (k === "READFILE") c.emit(instr(Op.ReadFile, inputConv(c, t, "READFILE")), span);
   else c.emit(instr(Op.GetRecord), span);
-  emitStore(c, t[0], t[1].span);
+  emitStore(c, t.place, t.span);
 }
 
 /** `WRITEFILE f, Expr` / `PUTRECORD f, Expr` / `SEEK f, Address` */

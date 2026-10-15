@@ -8,8 +8,8 @@ import { Char, DateVal, Real, type Value } from "../core/value.ts";
 import { noMemberError } from "./expr.ts";
 import { isBlockEnd, type Kind, lookupKeyword } from "./lexer.ts";
 import { type Compiler, type FnKind, newFnState, type Param } from "./state.ts";
-import { block, closeBlock, openBlock } from "./stmt.ts";
-import { arrayTy, convOf, T, type Ty, tyEquals } from "./types.ts";
+import { block, closeBlock } from "./stmt.ts";
+import { convOf, T, type Ty, tyEquals } from "./types.ts";
 
 /** `A, B, C`: stops at the first missing identifier. */
 function identList(c: Compiler, context: string): [string, Span][] {
@@ -107,7 +107,7 @@ function arraySpec(c: Compiler): Ty {
   } while (c.eat(","));
   c.expect("]", "to close the array bounds");
   c.expect("OF", "after the array bounds");
-  return arrayTy(dims, typeSpec(c));
+  return { k: "array", dims, elem: typeSpec(c) };
 }
 
 function unknownType(c: Compiler, name: string, span: Span): void {
@@ -178,7 +178,7 @@ export function constantStmt(c: Compiler): void {
   else if (!neg && tok.kind === "char") [value, ty] = [new Char(tok.value as string), T.Char];
   else if (!neg && tok.kind === "date") [value, ty] = [new DateVal(tok.value as number), T.Date];
   else if (!neg && (tok.kind === "TRUE" || tok.kind === "FALSE")) [value, ty] = [tok.kind === "TRUE", T.Bool];
-  else if (!neg && tok.kind === "str") [value, ty] = [[...c.text(tok.span)].slice(1, -1).join(""), T.Str];
+  else if (!neg && tok.kind === "str") [value, ty] = [tok.value as string, T.Str];
   else {
     c.parseError(
       c.expectedError("a literal value", "for the constant")
@@ -222,7 +222,7 @@ export function typeStmt(c: Compiler): void {
   }
 
   // Record type. Registered first so fields may point to it (`^Node`).
-  openBlock(c, "ENDTYPE");
+  c.openBlocks.push("ENDTYPE");
   const shape = newShape(c, name, span, false, undefined);
   while (!c.at("eof") && !isBlockEnd(c.tok.kind)) {
     if (!c.eat("DECLARE")) {
@@ -276,11 +276,10 @@ export function routineDef(c: Compiler, cls: [number, boolean] | undefined): voi
   const endKw = isFn ? "ENDFUNCTION" : "ENDPROCEDURE";
   c.advance();
   if (c.fs.length > 1) {
-    const outer = c.cur.func;
     c.error(
       Diagnostic.error("E0100", `a ${kw} cannot be defined inside another routine`)
         .primary(kwSpan, "nested definition")
-        .secondary(outer === undefined ? Span.DUMMY : c.funcs[outer].span, "inside this routine")
+        .secondary(c.funcs[c.cur.proto].span, "inside this routine")
         .help("move the definition to the top level of the file"),
     );
   }
@@ -325,7 +324,7 @@ export function routineDef(c: Compiler, cls: [number, boolean] | undefined): voi
     typeSpec(c);
   }
 
-  openBlock(c, endKw);
+  c.openBlocks.push(endKw);
   const kind: FnKind = isFn ? "function" : "procedure";
   const func = registerRoutine(c, name, nameSpan, cls, kind, params, ret);
   const [pkind, display]: [ProtoKind, string] = cls
@@ -336,7 +335,7 @@ export function routineDef(c: Compiler, cls: [number, boolean] | undefined): voi
   proto.signature = signature(c, kw, cls?.[0], name, params, ret);
   c.funcs[func] = { kind, params, ret, proto, defined: true, span: nameSpan };
 
-  c.fs.push(newFnState(func, func, isFn ? { ty: ret, span: retSpan } : undefined, cls?.[0]));
+  c.fs.push(newFnState(func, isFn ? { ty: ret, span: retSpan } : undefined, cls?.[0]));
   if (cls) c.pushLocal("SELF", { k: "class", id: cls[0] }, kwSpan, true, false, true);
   for (const p of params) {
     const slot = c.pushLocal(p.name, p.ty, p.span, true, p.byref, false);
@@ -468,7 +467,7 @@ export function classDef(c: Compiler): void {
   if (first) c.duplicateError(name, nameSpan, first);
 
   const cls = newShape(c, name, nameSpan, true, parent);
-  openBlock(c, "ENDCLASS");
+  c.openBlocks.push("ENDCLASS");
   for (;;) {
     const start = c.tok.span;
     const k = c.tok.kind;

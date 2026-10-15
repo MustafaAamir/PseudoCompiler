@@ -1,6 +1,6 @@
 /** Expression compilation with deferred loads. */
 
-import { type Builtin, BUILTINS, lookupBuiltin, type Pat, patName } from "../core/builtins.ts";
+import { type Builtin, BUILTINS, lookupBuiltin, type Pat, patName, signatureOf } from "../core/builtins.ts";
 import { Conv, global, type Instr, instr, Op, type VarLoc } from "../core/bytecode.ts";
 import { bestMatch, Diagnostic } from "../core/diag.ts";
 import { Span } from "../core/source.ts";
@@ -184,9 +184,7 @@ export function condition(c: Compiler, owner: string, ownerSpan: Span): void {
   }
 }
 
-function andExpr(c: Compiler): Expr {
-  return logical(c, "AND", notExpr, Op.JumpIfFalseOrPop);
-}
+const andExpr = (c: Compiler) => logical(c, "AND", notExpr, Op.JumpIfFalseOrPop);
 
 /** Left-associative short-circuit operator. */
 function logical(c: Compiler, kw: "AND" | "OR", operand: (c: Compiler) => Expr, jump: Op): Expr {
@@ -557,10 +555,8 @@ function primary(c: Compiler): Expr {
       return literal(c, true, T.Bool);
     case "FALSE":
       return literal(c, false, T.Bool);
-    case "str": {
-      const chars = [...c.text(span)];
-      return literal(c, chars.slice(1, -1).join(""), T.Str);
-    }
+    case "str":
+      return literal(c, tok.value as string, T.Str);
     case "(": {
       c.advance();
       const e = expr(c);
@@ -721,7 +717,7 @@ function constExpr(c: Compiler, name: string, v: Value, ty: Ty, decl: Span, span
         .secondary(decl, "declared as a CONSTANT here")
         .help(`declare \`${name}\` with DECLARE if it needs to change`),
     );
-    return valueExpr(T.Error, span);
+    return errorExpr(span);
   }
   c.constant(v, span);
   return { ty, span, constant: v };
@@ -924,6 +920,15 @@ function patAccepts(p: Pat, ty: Ty): boolean {
   }
 }
 
+const BUILTIN_RET: Partial<Record<Pat, Ty>> = {
+  Int: T.Int,
+  Real: T.Real,
+  Bool: T.Bool,
+  Char: T.Char,
+  Str: T.Str,
+  Date: T.Date,
+};
+
 function builtinCall(c: Compiler, bi: number, span: Span): Expr {
   const b: Builtin = BUILTINS[bi];
   const open = c.tok.span;
@@ -934,7 +939,7 @@ function builtinCall(c: Compiler, bi: number, span: Span): Expr {
     c.expect(")", "to close the argument list");
   }
   const full = span.to(c.prev);
-  const sig = `${b.name}(${b.params.map(patName).join(", ")}) RETURNS ${patName(b.ret)}`;
+  const sig = signatureOf(b);
   if (args.length !== b.params.length) {
     c.arityError(b.name, open.to(c.prev), b.params.length, args.length, Span.DUMMY, sig);
   } else {
@@ -951,15 +956,7 @@ function builtinCall(c: Compiler, bi: number, span: Span): Expr {
     });
   }
   c.emit(instr(Op.CallBuiltin, bi, args.length), full);
-  const RET: Partial<Record<Pat, Ty>> = {
-    Int: T.Int,
-    Real: T.Real,
-    Bool: T.Bool,
-    Char: T.Char,
-    Str: T.Str,
-    Date: T.Date,
-  };
-  const ret = b.ret === "SameAsArg0" ? (args[0]?.ty ?? T.Error) : (RET[b.ret] ?? T.Unknown);
+  const ret = b.ret === "SameAsArg0" ? (args[0]?.ty ?? T.Error) : (BUILTIN_RET[b.ret] ?? T.Unknown);
   return { ty: ret, span: full, call: "builtin" };
 }
 

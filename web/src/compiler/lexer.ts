@@ -97,7 +97,7 @@ const PUNCTS = [
   ".",
   "^",
 ] as const;
-export type Punct = (typeof PUNCTS)[number];
+type Punct = (typeof PUNCTS)[number];
 
 /** Token kinds: keywords and punctuation are their own spelling. */
 export type Kind = Kw | Punct | "ident" | "int" | "real" | "str" | "char" | "date" | "error" | "eof";
@@ -327,13 +327,13 @@ export class Lexer {
     return this.fail(d);
   }
 
-  private string(start: number, open: string): [Kind] | [Kind, undefined] {
+  private string(start: number, open: string): [Kind, string?] {
     const closes = (c: string) => c === '"' || (open !== '"' && c === "”");
     for (;;) {
       const c = this.peek();
       if (c !== undefined && closes(c)) {
         this.bump();
-        return ["str"];
+        return ["str", this.src.slice(start + 1, this.pos - 1)];
       }
       if (c === "\n" || c === undefined) {
         return this.fail(

@@ -33,16 +33,10 @@ async function expectOutput(text: string, expected: string, inputs: string[] = [
   assertEquals(o.output.trimEnd(), expected.trimEnd(), o.messages);
 }
 
+/** A compile error (`E` codes, exit code 1) or run-time error (`R` codes, exit code 2) whose message has `needles`. */
 async function expectError(text: string, code: string, needles: string[]): Promise<void> {
   const o = await run(text);
-  assertEquals(o.code, 1, `expected a compile error, got:\n${o.output}${o.messages}`);
-  assertStringIncludes(o.messages, `[${code}]`);
-  for (const n of needles) assertStringIncludes(o.messages, n);
-}
-
-async function expectRuntimeError(text: string, code: string, needles: string[]): Promise<void> {
-  const o = await run(text);
-  assertEquals(o.code, 2, `expected a run-time error, got:\n${o.output}${o.messages}`);
+  assertEquals(o.code, code.startsWith("R") ? 2 : 1, `expected ${code}, got:\n${o.output}${o.messages}`);
   assertStringIncludes(o.messages, `[${code}]`);
   for (const n of needles) assertStringIncludes(o.messages, n);
 }
@@ -202,23 +196,23 @@ Deno.test("warnings do not block running", async () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("run-time out of bounds has a backtrace and locals", () =>
-  expectRuntimeError(
+  expectError(
     "\nDECLARE Data : ARRAY[1:5] OF INTEGER\nPROCEDURE Fill(N : INTEGER)\n    FOR I ← 1 TO N\n        Data[I] ← I\n    NEXT I\nENDPROCEDURE\nCALL Fill(6)\n",
     "R0001",
     ["index 6 is outside 1:5", "off-by-one", "I = 6", "called from the main program"],
   ));
 
 Deno.test("uninitialized variable", () =>
-  expectRuntimeError("DECLARE X : INTEGER\nOUTPUT X + 1\n", "R0002", [
+  expectError("DECLARE X : INTEGER\nOUTPUT X + 1\n", "R0002", [
     "use of uninitialized variable `X`",
     "declared here",
   ]));
 
 Deno.test("division by zero", () =>
-  expectRuntimeError("DECLARE Z : INTEGER\nZ ← 0\nOUTPUT 10 DIV Z\n", "R0003", ["division by zero"]));
+  expectError("DECLARE Z : INTEGER\nZ ← 0\nOUTPUT 10 DIV Z\n", "R0003", ["division by zero"]));
 
 Deno.test("deep recursion is collapsed in the backtrace", () =>
-  expectRuntimeError(
+  expectError(
     "FUNCTION F(N : INTEGER) RETURNS INTEGER\n  RETURN F(N + 1)\nENDFUNCTION\nOUTPUT F(0)\n",
     "R0007",
     ["stack overflow", "times, recursively"],

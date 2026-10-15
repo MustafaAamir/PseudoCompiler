@@ -23,7 +23,6 @@ import {
   type Instr,
   instr,
   isGlobal,
-  local,
   type LocalInfo,
   type MethodMeta,
   Op,
@@ -32,7 +31,7 @@ import {
   type Shape,
   type VarLoc,
 } from "../core/bytecode.ts";
-import { bestMatch, Diagnostic, Diagnostics } from "../core/diag.ts";
+import { bestMatch, Diagnostic, Diagnostics, plural } from "../core/diag.ts";
 import { type Source, Span } from "../core/source.ts";
 import type { Value } from "../core/value.ts";
 import {
@@ -46,7 +45,7 @@ import {
   startsStatement,
   type Token,
 } from "./lexer.ts";
-import { convOf, T, type Ty, tyEquals } from "./types.ts";
+import { convOf, isNumeric, isText, T, type Ty, tyEquals } from "./types.ts";
 import type { Expr } from "./expr.ts";
 
 export interface Param {
@@ -100,19 +99,13 @@ export interface FieldDef {
   readonly span: Span;
 }
 
-export interface MethodDef {
-  readonly func: number;
-  readonly private: boolean;
-  readonly owner: number;
-}
-
 export interface ShapeDef {
   readonly name: string;
   readonly span: Span;
   readonly isClass: boolean;
   readonly parent: number | undefined;
   readonly fields: FieldDef[];
-  readonly methods: Map<string, MethodDef>;
+  readonly methods: Map<string, MethodMeta>;
   complete: boolean;
 }
 
@@ -127,7 +120,6 @@ const MAIN: ProtoRef = -1;
 
 export interface FnState {
   readonly proto: ProtoRef;
-  readonly func: number | undefined;
   readonly locals: Var[];
   readonly consts: Map<string, { value: Value; ty: Ty; span: Span }>;
   readonly loops: LoopCtx[];
@@ -192,7 +184,7 @@ export class Compiler {
   readonly symbolIds = new Map<string, number>();
   sites = 0;
 
-  readonly fs: FnState[] = [newFnState(MAIN, undefined, undefined, undefined)];
+  readonly fs: FnState[] = [newFnState(MAIN, undefined, undefined)];
   pending: PendingCall[] = [];
   pendingMethods: PendingMethodCheck[] = [];
   /** Terminators of the blocks currently open, innermost last. */
@@ -448,7 +440,7 @@ export class Compiler {
   pushLocal(name: string, ty: Ty, span: Span, param: boolean, byref: boolean, hidden: boolean): VarLoc {
     const locals = this.cur.locals;
     locals.push({ name, ty, span, used: false, assigned: param, byref, param, hidden });
-    return local(locals.length - 1);
+    return locals.length - 1;
   }
 
   /** A compiler-generated variable (loop bounds, CASE subjects, ...). */
@@ -481,7 +473,7 @@ export class Compiler {
 
   findLocal(name: string): VarLoc | undefined {
     const locals = this.cur.locals;
-    for (let i = locals.length - 1; i >= 0; i--) if (locals[i].name === name && !locals[i].hidden) return local(i);
+    for (let i = locals.length - 1; i >= 0; i--) if (locals[i].name === name && !locals[i].hidden) return i;
     return undefined;
   }
 
@@ -585,7 +577,7 @@ export class Compiler {
 
   // -- Classes --------------------------------------------------------------
 
-  findMethod(cls: number, name: string): MethodDef | undefined {
+  findMethod(cls: number, name: string): MethodMeta | undefined {
     for (let x: number | undefined = cls; x !== undefined; x = this.shapes[x].parent) {
       const m = this.shapes[x].methods.get(name);
       if (m) return m;
@@ -618,7 +610,7 @@ export class Compiler {
         ty: this.tyName(f.ty),
       }));
       const methods = new Map<number, MethodMeta>(
-        [...s.methods].map(([n, m]) => [this.symbolIds.get(n)!, { func: m.func, private: m.private, owner: m.owner }]),
+        [...s.methods].map(([n, m]) => [this.symbolIds.get(n)!, m]),
       );
       return { name: s.name, isClass: s.isClass, parent: s.parent, fields, fieldInits, methods };
     });
@@ -686,7 +678,6 @@ export class Compiler {
   }
 
   arityError(name: string, span: Span, expected: number, got: number, decl: Span, sig: string): void {
-    const plural = (n: number) => (n === 1 ? "" : "s");
     const d = Diagnostic.error(
       "E0301",
       `\`${name}\` takes ${expected} argument${plural(expected)} but ${got} ${got === 1 ? "was" : "were"} supplied`,
@@ -720,9 +711,9 @@ export class Compiler {
     const e = this.tyName(expected), f = this.tyName(found);
     const text = this.text(span);
     const d = Diagnostic.error("E0300", "mismatched types").primary(span, `expected \`${e}\`, found \`${f}\``);
-    const num = (t: Ty) => t.k === "int" || t.k === "real";
-    if (expected.k === "str" && num(found)) d.suggest(span, `NUM_TO_STR(${text})`, "convert the number to a STRING");
-    else if (num(expected) && (found.k === "str" || found.k === "char")) {
+    if (expected.k === "str" && isNumeric(found)) {
+      d.suggest(span, `NUM_TO_STR(${text})`, "convert the number to a STRING");
+    } else if (isNumeric(expected) && isText(found)) {
       d.suggest(span, `STR_TO_NUM(${text})`, "parse the text as a number");
     } else if (expected.k === "int" && found.k === "real") {
       d.suggest(span, `INT(${text})`, "truncate the REAL to an INTEGER")
@@ -765,11 +756,6 @@ export class Compiler {
   }
 }
 
-export function newFnState(
-  proto: ProtoRef,
-  func: number | undefined,
-  ret: FnState["ret"],
-  cls: number | undefined,
-): FnState {
-  return { proto, func, locals: [], consts: new Map(), loops: [], ret, cls, sawReturn: false };
+export function newFnState(proto: ProtoRef, ret: FnState["ret"], cls: number | undefined): FnState {
+  return { proto, locals: [], consts: new Map(), loops: [], ret, cls, sawReturn: false };
 }
