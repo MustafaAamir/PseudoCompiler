@@ -5,15 +5,22 @@ import { Console, Files, Stdin, type VirtualFs, VmConfig } from "../src/mod.ts";
 
 /** Older lines are dropped beyond this, so a chatty program cannot exhaust the page. */
 const MAX_LINES = 5000;
+let asks = 0;
 
 export class Terminal {
-  constructor(private readonly el: HTMLElement) {}
+  /** Lines go into `el`; `scroller` is the element that scrolls (`el` itself, or a container around it). */
+  constructor(private readonly el: HTMLElement, private readonly scroller: HTMLElement = el) {}
 
   private append(node: HTMLElement): void {
-    const atBottom = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 40;
+    const s = this.scroller;
+    const atBottom = s.scrollHeight - s.scrollTop - s.clientHeight < 48;
     this.el.append(node);
     while (this.el.childElementCount > MAX_LINES) this.el.firstElementChild!.remove();
-    if (atBottom) this.el.scrollTop = this.el.scrollHeight;
+    if (atBottom) this.scrollToEnd();
+  }
+
+  scrollToEnd(): void {
+    this.scroller.scrollTop = this.scroller.scrollHeight;
   }
 
   print(text: string, cls = "out"): void {
@@ -43,15 +50,16 @@ export class Terminal {
     const row = document.createElement("div");
     row.className = "ask";
     const field = document.createElement("input");
-    field.id = `ask-${crypto.randomUUID()}`;
+    field.id = `ask-${++asks}`;
     field.autocomplete = "off";
     field.spellcheck = false;
-    field.placeholder = "Enter sends · Ctrl+D ends input";
+    field.placeholder = "Enter submits the line; Ctrl+D signals end of input";
     const label = document.createElement("label");
     label.htmlFor = field.id;
-    label.textContent = `INPUT ${type}`;
+    label.textContent = `stdin (${type}):`;
     row.append(label, field);
     this.append(row);
+    this.scrollToEnd();
     field.focus({ preventScroll: true });
 
     const onKey = (e: KeyboardEvent) => {
@@ -61,7 +69,7 @@ export class Terminal {
       field.removeEventListener("keydown", onKey);
       field.readOnly = true;
       row.classList.add("answered");
-      if (eof) field.value = "(end of input)";
+      if (eof) field.value = "<EOF>";
       done(eof ? undefined : field.value);
     };
     field.addEventListener("keydown", onKey);

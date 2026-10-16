@@ -12,6 +12,8 @@ export function mountFiles(fs: VirtualFs, changed$: Observable<void>, save: () =
 
   merge(changed$, open$).subscribe(() => {
     const open = open$.value;
+    list.dataset.empty = "The virtual file system is empty. OPENFILE ... FOR WRITE creates files here; " +
+      "files created below can be read with OPENFILE ... FOR READ.";
     list.replaceChildren(
       ...[...fs.files.keys()].sort().map((name) => {
         const li = document.createElement("li");
@@ -19,7 +21,7 @@ export function mountFiles(fs: VirtualFs, changed$: Observable<void>, save: () =
         b.type = "button";
         b.setAttribute("aria-current", String(name === open));
         const lines = fs.files.get(name)!.split("\n").filter(Boolean).length;
-        b.innerHTML = `<span>${escapeHtml(name)}</span><small>${lines} ln</small>`;
+        b.innerHTML = `<span>${escapeHtml(name)}</span><small>${lines} line${lines === 1 ? "" : "s"}</small>`;
         b.addEventListener("click", () => open$.next(name));
         li.append(b);
         return li;
@@ -43,7 +45,7 @@ export function mountFiles(fs: VirtualFs, changed$: Observable<void>, save: () =
     const open = open$.value;
     if (!open) return;
     if (remove.textContent === "Delete") {
-      remove.textContent = `Confirm delete`;
+      remove.textContent = `Delete ${open}? Click again to confirm`;
       return;
     }
     fs.files.delete(open);

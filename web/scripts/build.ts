@@ -41,7 +41,6 @@ await Deno.copyFile(path("ui/style.css"), `${dist}style.css`);
 await Deno.writeTextFile(
   `${dist}index.html`,
   `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n` +
-    `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n` +
     page.replace("<!--STYLE-->", `<link rel="stylesheet" href="style.css">`).replace(
       '<div class="app">',
       '</head>\n<body>\n<div class="app">',

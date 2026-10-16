@@ -138,7 +138,9 @@ async function main(): Promise<number> {
 
 async function repl(): Promise<number> {
   const session = new Session();
-  console.log("pseudo REPL — end a statement with an empty line to run a multi-line block; Ctrl-D quits");
+  console.log(
+    "pseudo REPL: inputs accumulate in one session transcript; a block that is still open continues on the next line, an empty line forces evaluation; Ctrl-D exits",
+  );
   let pending = "";
   for (;;) {
     Deno.stdout.writeSync(encoder.encode(pending ? "  ... " : "pseudo # "));

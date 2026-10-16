@@ -126,7 +126,7 @@ combineLatest([editor.caret$, check$]).subscribe(([caret, check]) => {
     return s !== undefined && source.lineIndex(s.start) === line - 1;
   };
   const here = check.text === editor.text ? check.diagnostics.find(at) ?? check.diagnostics.find(onLine) : undefined;
-  el.textContent = here ? `${here.code} ${here.message}` : "";
+  el.textContent = here ? `${here.severity}[${here.code}]: ${here.message}` : "";
   el.className = here?.severity ?? "dim";
 });
 
@@ -134,7 +134,11 @@ combineLatest([editor.caret$, check$]).subscribe(([caret, check]) => {
 // Tabs: click or arrow keys; the selected tab is remembered.
 
 const tabButtons = TABS.map((t) => $<HTMLButtonElement>(`tab-${t}`));
-merge(...tabButtons.map((b, i) => fromEvent(b, "click").pipe(map(() => TABS[i])))).subscribe((t) => tab$.next(t));
+merge(...tabButtons.map((b, i) => fromEvent(b, "click").pipe(map(() => TABS[i])))).subscribe((t) => {
+  tab$.next(t);
+  // Stacked layout: bring the whole tools pane on screen so its input rows are reachable.
+  if (matchMedia("(max-width: 860px)").matches) $("tab-console").closest(".pane")!.scrollIntoView({ block: "start" });
+});
 fromEvent<KeyboardEvent>($("tab-console").parentElement!, "keydown").subscribe((e) => {
   const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
   if (!step) return;
@@ -165,13 +169,15 @@ check$.subscribe((check) => {
       warnings && `<span class="w">${n(warnings, "warning")}</span>`,
     ]
       .filter(Boolean).join("")
-    : `<span>Type-checks</span>`;
+    : `<span>0 errors, 0 warnings</span>`;
   const count = $("problem-count");
   count.textContent = errors || warnings ? String(errors || warnings) : "";
   count.className = `count ${errors ? "e" : "w"}`;
 
   const r = new Renderer(check.source, "html");
-  $("problems").replaceChildren(...check.diagnostics.map((d) => problem(d, r, check.source)));
+  const list = $("problems");
+  list.dataset.empty = `No diagnostics: ${check.source.name} compiles with 0 errors and 0 warnings.`;
+  list.replaceChildren(...check.diagnostics.map((d) => problem(d, r, check.source)));
 });
 
 function problem(d: Diagnostic, r: Renderer, source: Source): HTMLLIElement {
@@ -186,7 +192,7 @@ function problem(d: Diagnostic, r: Renderer, source: Source): HTMLLIElement {
   const span = d.primarySpan();
   if (span) {
     const show = () => editor.reveal(span.start, span.end);
-    pre.title = "Show in source";
+    pre.title = "Select the primary span in the editor";
     pre.addEventListener("click", show);
     actions.append(textButton(`Go to line ${source.lineIndex(span.start) + 1}`, show));
   }
@@ -209,7 +215,7 @@ function problem(d: Diagnostic, r: Renderer, source: Source): HTMLLIElement {
 function textButton(label: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
-  b.className = "text";
+  b.className = "link";
   b.textContent = label;
   b.addEventListener("click", onClick);
   return b;
@@ -222,10 +228,14 @@ combineLatest([check$, tab$]).pipe(
   filter(([, tab]) => tab === "bytecode"),
   map(([check]) => check),
   distinctUntilChanged(),
-).subscribe(({ program, source }) => {
+).subscribe((check) => {
+  const { program, source } = check;
   const el = $("bytecode");
   if (!program) {
-    el.innerHTML = `<span class="cm">; the program has errors; fix them to see its bytecode</span>`;
+    const n = check.diagnostics.filter((d) => d.isError).length;
+    el.innerHTML = `<span class="cm">; no bytecode: compilation of ${escapeHtml(source.name)} failed with ${n} error${
+      n === 1 ? "" : "s"
+    } (see Problems)</span>`;
     return;
   }
   el.innerHTML = program.disassemble(source).split("\n").map((line) => {
@@ -261,7 +271,7 @@ const term = new Terminal($("console"));
 const runBtn = $<HTMLButtonElement>("run");
 const stopBtn = $<HTMLButtonElement>("stop");
 
-function setStatus(text: string, cls = "", time = "—", instr = "—"): void {
+function setStatus(text: string, cls = "", time = "-", instr = "-"): void {
   const el = $("run-state");
   el.textContent = text;
   el.className = cls;
@@ -275,16 +285,30 @@ function run(): void {
   fault$.next(undefined);
   term.clear();
   tab$.next("console");
-  term.print(`Running ${source.name}`, "sys");
-  setStatus("Running", "running");
+  setStatus("compiling", "running");
 
   let vm: Vm | undefined;
   const t0 = performance.now();
+  const r = new Renderer(source, "html");
   const program = Effect.gen(function* () {
-    const { program } = yield* compileSource(source);
+    const { program, diagnostics } = yield* compileSource(source);
+    const warnings = diagnostics.sorted();
+    for (const d of warnings) term.html(r.render(d), "diag warning");
+    term.print(
+      `compiled ${source.name}: 0 errors, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}; ` +
+        `${program.main.code.length + program.functions.reduce((n, f) => n + f.code.length, 0)} instructions in ` +
+        `${program.functions.length + 1} routine${program.functions.length ? "s" : ""}, ` +
+        `${program.globals.length} globals, ${program.shapes.length} shapes`,
+      "sys",
+    );
+    setStatus("running", "running");
     vm = new Vm(program, { fs, seed: (Math.random() * 0x7fffffff) | 1 });
     yield* drive(vm, source);
-  }).pipe(Effect.provide(terminalLayer(term, fs, (waiting) => setStatus(waiting ? "Input" : "Running", "running"))));
+  }).pipe(
+    Effect.provide(
+      terminalLayer(term, fs, (waiting) => setStatus(waiting ? "waiting for stdin" : "running", "running")),
+    ),
+  );
 
   const fiber = Effect.runFork(program);
   running$.next(fiber);
@@ -295,33 +319,42 @@ function run(): void {
     lastVm$.next(vm);
     const ms = performance.now() - t0;
     const time = ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
-    const instr = vm ? vm.stats.instructions.toLocaleString("en") : "—";
-    const tail = vm ? ` in ${time}, ${instr} instructions` : "";
+    const instr = vm ? vm.stats.instructions.toLocaleString("en") : "-";
+    const counts = vm
+      ? `${instr} instructions, ${vm.stats.calls.toLocaleString("en")} calls, ` +
+        `${vm.stats.sends.toLocaleString("en")} sends, max call depth ${vm.stats.maxDepth}, wall time ${time}`
+      : "";
 
     if (Exit.isSuccess(exit)) {
-      term.print(`Finished${tail}`, "sys ok");
-      return setStatus("Done", "", time, instr);
+      term.print(`exit 0: halted normally (${counts})`, "sys ok");
+      return setStatus("exited 0", "ok", time, instr);
     }
     if (Exit.isInterrupted(exit)) {
-      term.print(`Stopped${tail}`, "sys bad");
-      return setStatus("Stopped", "failed", time, instr);
+      term.print(`exit 130: interrupted by user at a VM slice boundary (${counts})`, "sys bad");
+      return setStatus("interrupted", "failed", time, instr);
     }
     const failure = Cause.failureOption(exit.cause);
     if (Option.isNone(failure)) {
-      term.print(`Internal error: ${Cause.pretty(exit.cause)}`, "sys bad");
-      return setStatus("Internal error", "failed");
+      term.print(`internal error (please report): ${Cause.pretty(exit.cause)}`, "sys bad");
+      return setStatus("internal error", "failed");
     }
     const e = failure.value;
-    const r = new Renderer(source, "html");
     if (e._tag === "CompileError") {
-      for (const d of e.diagnostics) term.html(r.render(d), "diag");
-      term.print("Did not run: the program has compile errors", "sys bad");
-      return setStatus("Errors", "failed");
+      for (const d of e.diagnostics) term.html(r.render(d), d.isError ? "diag" : "diag warning");
+      const n = e.diagnostics.filter((d) => d.isError).length;
+      term.print(
+        `exit 1: compilation of ${source.name} failed with ${n} error${n === 1 ? "" : "s"}; no code was executed`,
+        "sys bad",
+      );
+      return setStatus("compile failed", "failed");
     }
     term.html(r.render(e.error.toDiagnostic()), "diag");
-    term.print(`Run-time error${tail}`, "sys bad");
+    term.print(
+      `exit 2: run-time error ${e.error.fault.code} (${counts}); the faulting expression is marked in the source`,
+      "sys bad",
+    );
     fault$.next(e.error.span);
-    setStatus(e.error.fault.code, "failed", time, instr);
+    setStatus(`error ${e.error.fault.code}`, "failed", time, instr);
   });
 }
 
@@ -335,7 +368,11 @@ running$.subscribe((fiber) => {
   runBtn.disabled = !!fiber;
   stopBtn.disabled = !fiber;
 });
-term.print("Run (Ctrl+Enter) compiles and runs the program. INPUT asks here.", "sys");
+term.print(
+  "Console: standard output of the running program. Run (Ctrl+Enter) compiles the editor buffer and executes it " +
+    "in slices of 100,000 instructions; INPUT and READ prompt here for standard input. Stop (Esc) interrupts execution.",
+  "sys",
+);
 
 // ---------------------------------------------------------------------------
 // Stats
@@ -344,7 +381,8 @@ lastVm$.subscribe((vm) => {
   const el = $("stats");
   if (!vm) {
     el.innerHTML =
-      `<p class="empty">Run a program to see the instructions it executed and how its message sends were cached.</p>`;
+      `<p class="empty">No execution data. Run the program to record instruction and call counts, the state of every ` +
+      `message-send inline cache (monomorphic, polymorphic or megamorphic) and the final values of its globals.</p>`;
     return;
   }
   const s = vm.stats;
@@ -367,15 +405,15 @@ lastVm$.subscribe((vm) => {
       </div>
     </section>
     <section>
-      <h3>Send sites · ${sites.length} of ${vm.program.numSites} executed</h3>
+      <h3>Send sites: ${sites.length} of ${vm.program.numSites} executed</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>Site</th><th>Cache</th><th>Receiver classes</th></tr></thead>
         <tbody>${
     rows(sites.map((x) => [
       `@ic${x.site}`,
       `<span class="state ${x.state}">${x.state}</span>`,
-      escapeHtml(x.classes.join(", ") || "—"),
-    ])) || `<tr><td colspan="3" class="dim">No message sends ran</td></tr>`
+      escapeHtml(x.classes.join(", ") || "(any)"),
+    ])) || `<tr><td colspan="3" class="dim">No message sends were executed.</td></tr>`
   }</tbody>
       </table></div>
     </section>
@@ -385,7 +423,7 @@ lastVm$.subscribe((vm) => {
         <thead><tr><th>Name</th><th>Type</th><th>Value</th></tr></thead>
         <tbody>${
     rows(globals.map((g) => [escapeHtml(g.name), escapeHtml(g.ty), escapeHtml(g.value)])) ||
-    `<tr><td colspan="3" class="dim">None</td></tr>`
+    `<tr><td colspan="3" class="dim">The program declares no globals.</td></tr>`
   }</tbody>
       </table></div>
     </section>`;
@@ -395,7 +433,7 @@ lastVm$.subscribe((vm) => {
 // Examples, files, REPL
 
 const picker = $<HTMLSelectElement>("example");
-picker.innerHTML = `<option value="">Example…</option>` +
+picker.innerHTML = `<option value="">Load example</option>` +
   [...Object.keys(EXAMPLES), "hello.pseudo"].map((n) => `<option>${escapeHtml(n)}</option>`).join("");
 fromEvent(picker, "change").subscribe(() => {
   if (picker.value) {

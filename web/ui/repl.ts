@@ -15,7 +15,8 @@ const WORD = /[\p{L}_][\p{L}\p{N}_]*$/u;
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
 
 export function mountRepl(fs: VirtualFs, filesChanged$: Subject<void>): void {
-  const term = new Terminal($("repl-log"));
+  const scroller = $("repl");
+  const term = new Terminal($("repl-log"), scroller);
   const input = $<HTMLTextAreaElement>("repl-input");
   const hint = $("repl-hint");
   const session = new Session("repl");
@@ -39,6 +40,7 @@ export function mountRepl(fs: VirtualFs, filesChanged$: Subject<void>): void {
         busy$.next(undefined);
         filesChanged$.next();
         done();
+        queueMicrotask(() => term.scrollToEnd());
         if (Exit.isSuccess(exit)) {
           const { declared, echoes, warnings, source } = exit.value;
           const r = new Renderer(source, "html");
@@ -61,15 +63,21 @@ export function mountRepl(fs: VirtualFs, filesChanged$: Subject<void>): void {
             );
           }
         } else if (Exit.isInterrupted(exit)) {
-          term.print("Interrupted", "sys bad");
+          term.print(
+            "evaluation interrupted at a VM slice boundary; definitions and globals assigned before the interrupt are kept",
+            "sys bad",
+          );
         } else {
           const failure = Cause.failureOption(exit.cause);
-          if (Option.isNone(failure)) term.print(`Internal error: ${Cause.pretty(exit.cause)}`, "sys bad");
-          else {
+          if (Option.isNone(failure)) {
+            term.print(`internal error (please report): ${Cause.pretty(exit.cause)}`, "sys bad");
+          } else {
             const e = failure.value;
             const r = new Renderer(e.source, "html");
             const diags = e._tag === "CompileError" ? e.diagnostics : [e.error.toDiagnostic()];
-            for (const d of diags) term.html(r.render(d), "diag");
+            for (const d of diags) {
+              term.html(r.render(d), "diag");
+            }
           }
         }
       })
@@ -148,32 +156,51 @@ export function mountRepl(fs: VirtualFs, filesChanged$: Subject<void>): void {
     distinctUntilChanged((a, b) => a[0] === b[0] && a[1] === b[1]),
   ).subscribe(([text, caret]) => {
     if (!text.trim()) {
-      hint.textContent = busy$.value ? "Running. Esc interrupts." : "";
+      hint.textContent = busy$.value ? "evaluating; Esc interrupts the fiber" : "";
       return;
     }
     const found = completions(text, caret);
     if (found && WORD_CHAR.test(text[caret - 1] ?? "") && !WORD_CHAR.test(text[caret] ?? "")) {
-      hint.innerHTML = found.options
+      hint.innerHTML = `completions (Tab cycles): ` + found.options
         .map((o, i) => i ? escapeHtml(o) : `<span class="pick">${escapeHtml(o)}</span>`)
-        .join("  ");
+        .join(", ");
       return;
     }
     const { diagnostics, echoTypes } = session.check(text);
     const error = diagnostics.find((d) => d.isError);
-    if (error?.code === "E0101") hint.textContent = "Block continues: Enter adds a line";
-    else if (error) hint.innerHTML = `<span class="err">${escapeHtml(`${error.code} ${error.message}`)}</span>`;
-    else if (echoTypes.length) hint.innerHTML = `- : <span class="ty">${escapeHtml(echoTypes.join(", "))}</span>`;
-    else hint.textContent = "";
+    if (error?.code === "E0101") {
+      hint.textContent =
+        "block not yet terminated (E0101): Enter inserts a line; the input is evaluated once it closes";
+    } else if (error) {
+      hint.innerHTML = `<span class="err">${escapeHtml(`error[${error.code}]: ${error.message}`)}</span>`;
+    } else if (echoTypes.length) {
+      hint.innerHTML = `result type: <span class="ty">${escapeHtml(echoTypes.join(", "))}</span>`;
+    } else hint.textContent = "";
   });
 
   fromEvent($("repl-reset"), "click").subscribe(() => {
     if (busy$.value) return;
     session.reset();
     term.clear();
-    term.print("Session reset. All variables and definitions are gone.", "sys");
+    term.print(
+      "session reset: transcript, globals, routines, types and classes discarded; inline caches cleared",
+      "sys",
+    );
   });
 
-  term.print("Statements run when entered; definitions persist. Expressions and assignments print their value.", "sys");
+  term.print(
+    "REPL session. Each input is appended to the session transcript and the whole transcript is recompiled; " +
+      "the VM resumes from the previous HALT, so globals, routines, classes and warm inline caches persist. " +
+      "Expressions and assignments echo `name : TYPE = value`.",
+    "sys",
+  );
+
+  // Clicking anywhere in the transcript focuses the prompt, unless text is being selected or an INPUT field was hit.
+  fromEvent<MouseEvent>(scroller, "click").subscribe((e) => {
+    if ((e.target as HTMLElement).closest("input, textarea, button") || getSelection()?.toString()) return;
+    input.focus({ preventScroll: true });
+    term.scrollToEnd();
+  });
   (async () => {
     for (const text of ["DECLARE Marks : ARRAY[1:3] OF INTEGER", "Marks[1] ← 72", 'LENGTH("Pseudocode") * 2']) {
       await submit(text, false);
