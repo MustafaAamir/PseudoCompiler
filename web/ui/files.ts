@@ -3,6 +3,7 @@
 import { BehaviorSubject, debounceTime, fromEvent, merge, type Observable } from "rxjs";
 import { escapeHtml, type VirtualFs } from "../src/mod.ts";
 import { $ } from "./dom.ts";
+import { emptyState, h } from "./components.ts";
 
 export function mountFiles(fs: VirtualFs, changed$: Observable<void>, save: () => void): void {
   const list = $("file-list");
@@ -12,21 +13,28 @@ export function mountFiles(fs: VirtualFs, changed$: Observable<void>, save: () =
 
   merge(changed$, open$).subscribe(() => {
     const open = open$.value;
-    list.dataset.empty = "The virtual file system is empty. OPENFILE ... FOR WRITE creates files here; " +
-      "files created below can be read with OPENFILE ... FOR READ.";
-    list.replaceChildren(
-      ...[...fs.files.keys()].sort().map((name) => {
-        const li = document.createElement("li");
-        const b = document.createElement("button");
-        b.type = "button";
-        b.setAttribute("aria-current", String(name === open));
-        const lines = fs.files.get(name)!.split("\n").filter(Boolean).length;
-        b.innerHTML = `<span>${escapeHtml(name)}</span><small>${lines} line${lines === 1 ? "" : "s"}</small>`;
-        b.addEventListener("click", () => open$.next(name));
-        li.append(b);
-        return li;
-      }),
-    );
+    if (!fs.files.size) {
+      list.replaceChildren(h(
+        "li",
+        {},
+        emptyState(
+          "No files",
+          "`OPENFILE ... FOR WRITE` creates files here. Files created below can be read with `OPENFILE ... FOR READ`.",
+        ),
+      ));
+    } else {list.replaceChildren(
+        ...[...fs.files.keys()].sort().map((name) => {
+          const li = document.createElement("li");
+          const b = document.createElement("button");
+          b.type = "button";
+          b.setAttribute("aria-current", String(name === open));
+          const lines = fs.files.get(name)!.split("\n").filter(Boolean).length;
+          b.innerHTML = `<span>${escapeHtml(name)}</span><small>${lines} line${lines === 1 ? "" : "s"}</small>`;
+          b.addEventListener("click", () => open$.next(name));
+          li.append(b);
+          return li;
+        }),
+      );}
     $("file-open-name").textContent = open ?? "No file selected";
     body.disabled = !open || !fs.files.has(open);
     body.value = open ? fs.files.get(open) ?? "" : "";

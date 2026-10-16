@@ -41,6 +41,7 @@ import { Editor, type Squiggle } from "./editor.ts";
 import { mountFiles } from "./files.ts";
 import { mountRepl } from "./repl.ts";
 import { Terminal, terminalLayer } from "./terminal.ts";
+import { badge, diagnosticCard, emptyState, eventCard, h, rich, shortcuts, type Tone } from "./components.ts";
 
 declare global {
   /** Example programs keyed by file name, injected by the build. */
@@ -126,8 +127,9 @@ combineLatest([editor.caret$, check$]).subscribe(([caret, check]) => {
     return s !== undefined && source.lineIndex(s.start) === line - 1;
   };
   const here = check.text === editor.text ? check.diagnostics.find(at) ?? check.diagnostics.find(onLine) : undefined;
-  el.textContent = here ? `${here.severity}[${here.code}]: ${here.message}` : "";
-  el.className = here?.severity ?? "dim";
+  el.replaceChildren(
+    ...(here ? [badge(here.code, here.isError ? "err" : "warn"), rich(here.message)] : []),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -163,62 +165,61 @@ check$.subscribe((check) => {
   const errors = check.diagnostics.filter((d) => d.isError).length;
   const warnings = check.diagnostics.length - errors;
   const n = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
-  $("check-summary").innerHTML = errors || warnings
-    ? [
-      errors && `<span class="e">${n(errors, "error")}</span>`,
-      warnings && `<span class="w">${n(warnings, "warning")}</span>`,
-    ]
-      .filter(Boolean).join("")
-    : `<span>0 errors, 0 warnings</span>`;
+  $("check-summary").replaceChildren(
+    ...(errors || warnings
+      ? [errors && badge(n(errors, "error"), "err"), warnings && badge(n(warnings, "warning"), "warn")]
+        .filter((b): b is HTMLSpanElement => !!b)
+      : [badge("No problems", "ok")]),
+  );
   const count = $("problem-count");
   count.textContent = errors || warnings ? String(errors || warnings) : "";
   count.className = `count ${errors ? "e" : "w"}`;
 
   const r = new Renderer(check.source, "html");
   const list = $("problems");
-  list.dataset.empty = `No diagnostics: ${check.source.name} compiles with 0 errors and 0 warnings.`;
-  list.replaceChildren(...check.diagnostics.map((d) => problem(d, r, check.source)));
+  if (!check.diagnostics.length) {
+    return list.replaceChildren(h(
+      "li",
+      {},
+      emptyState(
+        "No problems",
+        `\`${check.source.name}\` type-checks with no errors or warnings. Diagnostics appear here as you edit.`,
+      ),
+    ));
+  }
+  list.replaceChildren(...check.diagnostics.map((d) => h("li", {}, problem(d, r, check.source))));
 });
 
-function problem(d: Diagnostic, r: Renderer, source: Source): HTMLLIElement {
-  const li = document.createElement("li");
-  li.className = `problem ${d.severity}`;
-  const pre = document.createElement("pre");
-  pre.innerHTML = r.render(d);
-  const actions = document.createElement("div");
-  actions.className = "actions";
-  li.append(pre, actions);
-
+function problem(d: Diagnostic, r: Renderer, source: Source): HTMLElement {
+  const actions = h("div", { className: "actions" });
+  const card = diagnosticCard(d, r, actions);
   const span = d.primarySpan();
   if (span) {
     const show = () => editor.reveal(span.start, span.end);
-    pre.title = "Select the primary span in the editor";
-    pre.addEventListener("click", show);
-    actions.append(textButton(`Go to line ${source.lineIndex(span.start) + 1}`, show));
+    card.querySelector("pre")!.addEventListener("click", show);
+    actions.append(
+      h(
+        "button",
+        { type: "button", className: "link", onclick: show },
+        `Go to line ${source.lineIndex(span.start) + 1}`,
+      ),
+    );
   }
   const explanation = explain(d.code);
   if (explanation) {
-    const box = document.createElement("p");
-    box.className = "explanation";
-    box.hidden = true;
-    box.textContent = explanation;
-    const toggle = textButton(`Explain ${d.code}`, () => {
-      box.hidden = !box.hidden;
-      toggle.textContent = box.hidden ? `Explain ${d.code}` : "Hide explanation";
-    });
+    const box = h("p", { className: "explanation", hidden: true }, explanation);
+    const toggle = h("button", {
+      type: "button",
+      className: "link",
+      onclick: () => {
+        box.hidden = !box.hidden;
+        toggle.textContent = box.hidden ? `Explain ${d.code}` : "Hide explanation";
+      },
+    }, `Explain ${d.code}`);
     actions.append(toggle);
-    li.append(box);
+    card.append(box);
   }
-  return li;
-}
-
-function textButton(label: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "link";
-  b.textContent = label;
-  b.addEventListener("click", onClick);
-  return b;
+  return card;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,9 +234,11 @@ combineLatest([check$, tab$]).pipe(
   const el = $("bytecode");
   if (!program) {
     const n = check.diagnostics.filter((d) => d.isError).length;
-    el.innerHTML = `<span class="cm">; no bytecode: compilation of ${escapeHtml(source.name)} failed with ${n} error${
-      n === 1 ? "" : "s"
-    } (see Problems)</span>`;
+    el.replaceChildren(emptyState(
+      "No bytecode",
+      `\`${source.name}\` has ${n} compile error${n === 1 ? "" : "s"}. Bytecode is generated once it compiles; ` +
+        "see Problems for details.",
+    ));
     return;
   }
   el.innerHTML = program.disassemble(source).split("\n").map((line) => {
@@ -271,10 +274,8 @@ const term = new Terminal($("console"));
 const runBtn = $<HTMLButtonElement>("run");
 const stopBtn = $<HTMLButtonElement>("stop");
 
-function setStatus(text: string, cls = "", time = "-", instr = "-"): void {
-  const el = $("run-state");
-  el.textContent = text;
-  el.className = cls;
+function setStatus(text: string, tone: Tone = "neutral", time = "-", instr = "-"): void {
+  $("run-state").replaceChildren(badge(text, tone));
   $("run-time").textContent = time;
   $("run-instr").textContent = instr;
 }
@@ -285,7 +286,7 @@ function run(): void {
   fault$.next(undefined);
   term.clear();
   tab$.next("console");
-  setStatus("compiling", "running");
+  setStatus("Compiling", "info");
 
   let vm: Vm | undefined;
   const t0 = performance.now();
@@ -293,20 +294,25 @@ function run(): void {
   const program = Effect.gen(function* () {
     const { program, diagnostics } = yield* compileSource(source);
     const warnings = diagnostics.sorted();
-    for (const d of warnings) term.html(r.render(d), "diag warning");
-    term.print(
-      `compiled ${source.name}: 0 errors, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}; ` +
-        `${program.main.code.length + program.functions.reduce((n, f) => n + f.code.length, 0)} instructions in ` +
-        `${program.functions.length + 1} routine${program.functions.length ? "s" : ""}, ` +
-        `${program.globals.length} globals, ${program.shapes.length} shapes`,
-      "sys",
-    );
-    setStatus("running", "running");
+    term.add(eventCard({
+      tone: "info",
+      badge: "Compiled",
+      title: source.name,
+      figures: [
+        ["Bytecode", program.main.code.length + program.functions.reduce((n, f) => n + f.code.length, 0)],
+        ["Routines", program.functions.length + 1],
+        ["Globals", program.globals.length],
+        ["Classes and types", program.shapes.length],
+        ["Warnings", warnings.length],
+      ],
+    }));
+    for (const d of warnings) term.add(diagnosticCard(d, r));
+    setStatus("Running", "info");
     vm = new Vm(program, { fs, seed: (Math.random() * 0x7fffffff) | 1 });
     yield* drive(vm, source);
   }).pipe(
     Effect.provide(
-      terminalLayer(term, fs, (waiting) => setStatus(waiting ? "waiting for stdin" : "running", "running")),
+      terminalLayer(term, fs, (waiting) => setStatus(waiting ? "Waiting for input" : "Running", "info")),
     ),
   );
 
@@ -320,41 +326,62 @@ function run(): void {
     const ms = performance.now() - t0;
     const time = ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
     const instr = vm ? vm.stats.instructions.toLocaleString("en") : "-";
-    const counts = vm
-      ? `${instr} instructions, ${vm.stats.calls.toLocaleString("en")} calls, ` +
-        `${vm.stats.sends.toLocaleString("en")} sends, max call depth ${vm.stats.maxDepth}, wall time ${time}`
-      : "";
+    const figures: [string, string | number][] = vm
+      ? [
+        ["Instructions", vm.stats.instructions],
+        ["Calls", vm.stats.calls],
+        ["Message sends", vm.stats.sends],
+        ["Max call depth", vm.stats.maxDepth],
+        ["Wall time", time],
+      ]
+      : [];
 
     if (Exit.isSuccess(exit)) {
-      term.print(`exit 0: halted normally (${counts})`, "sys ok");
-      return setStatus("exited 0", "ok", time, instr);
+      term.add(eventCard({ tone: "ok", badge: "Exit 0", title: "Halted normally", figures }));
+      return setStatus("Exited 0", "ok", time, instr);
     }
     if (Exit.isInterrupted(exit)) {
-      term.print(`exit 130: interrupted by user at a VM slice boundary (${counts})`, "sys bad");
-      return setStatus("interrupted", "failed", time, instr);
+      term.add(eventCard({
+        tone: "warn",
+        badge: "Exit 130",
+        title: "Interrupted",
+        detail: "Execution was stopped at a VM time-slice boundary. Output produced so far is kept above.",
+        figures,
+      }));
+      return setStatus("Interrupted", "warn", time, instr);
     }
     const failure = Cause.failureOption(exit.cause);
     if (Option.isNone(failure)) {
-      term.print(`internal error (please report): ${Cause.pretty(exit.cause)}`, "sys bad");
-      return setStatus("internal error", "failed");
+      term.add(eventCard({
+        tone: "err",
+        badge: "Internal",
+        title: "Internal error in the playground",
+        detail: Cause.pretty(exit.cause),
+      }));
+      return setStatus("Internal error", "err");
     }
     const e = failure.value;
     if (e._tag === "CompileError") {
-      for (const d of e.diagnostics) term.html(r.render(d), d.isError ? "diag" : "diag warning");
+      for (const d of e.diagnostics) term.add(diagnosticCard(d, r));
       const n = e.diagnostics.filter((d) => d.isError).length;
-      term.print(
-        `exit 1: compilation of ${source.name} failed with ${n} error${n === 1 ? "" : "s"}; no code was executed`,
-        "sys bad",
-      );
-      return setStatus("compile failed", "failed");
+      term.add(eventCard({
+        tone: "err",
+        badge: "Exit 1",
+        title: "Compilation failed",
+        detail: `\`${source.name}\` has ${n} error${n === 1 ? "" : "s"}; no code was executed.`,
+      }));
+      return setStatus("Compile failed", "err");
     }
-    term.html(r.render(e.error.toDiagnostic()), "diag");
-    term.print(
-      `exit 2: run-time error ${e.error.fault.code} (${counts}); the faulting expression is marked in the source`,
-      "sys bad",
-    );
+    term.add(diagnosticCard(e.error.toDiagnostic(), r));
+    term.add(eventCard({
+      tone: "err",
+      badge: "Exit 2",
+      title: `Run-time error ${e.error.fault.code}`,
+      detail: "The faulting expression is highlighted in the editor.",
+      figures,
+    }));
     fault$.next(e.error.span);
-    setStatus(`error ${e.error.fault.code}`, "failed", time, instr);
+    setStatus(`Error ${e.error.fault.code}`, "err", time, instr);
   });
 }
 
@@ -368,11 +395,13 @@ running$.subscribe((fiber) => {
   runBtn.disabled = !!fiber;
   stopBtn.disabled = !fiber;
 });
-term.print(
-  "Console: standard output of the running program. Run (Ctrl+Enter) compiles the editor buffer and executes it " +
-    "in slices of 100,000 instructions; INPUT and READ prompt here for standard input. Stop (Esc) interrupts execution.",
-  "sys",
-);
+term.add(emptyState(
+  "Console",
+  "Standard output of the running program appears here. Run compiles the editor buffer and executes it in " +
+    "slices of 100,000 instructions; `INPUT` statements ask for values in this panel.",
+  shortcuts([["Ctrl+Enter", "Run"], ["Esc", "Stop"], ["Ctrl+D", "End of input"]]),
+));
+setStatus("Idle");
 
 // ---------------------------------------------------------------------------
 // Stats
@@ -380,9 +409,11 @@ term.print(
 lastVm$.subscribe((vm) => {
   const el = $("stats");
   if (!vm) {
-    el.innerHTML =
-      `<p class="empty">No execution data. Run the program to record instruction and call counts, the state of every ` +
-      `message-send inline cache (monomorphic, polymorphic or megamorphic) and the final values of its globals.</p>`;
+    el.replaceChildren(emptyState(
+      "No execution data",
+      "Run the program to record instruction and call counts, the state of every message-send inline cache " +
+        "(monomorphic, polymorphic or megamorphic) and the final values of its globals.",
+    ));
     return;
   }
   const s = vm.stats;
@@ -411,7 +442,9 @@ lastVm$.subscribe((vm) => {
         <tbody>${
     rows(sites.map((x) => [
       `@ic${x.site}`,
-      `<span class="state ${x.state}">${x.state}</span>`,
+      `<span class="badge ${
+        { monomorphic: "ok", polymorphic: "warn", megamorphic: "err" }[x.state]
+      }">${x.state}</span>`,
       escapeHtml(x.classes.join(", ") || "(any)"),
     ])) || `<tr><td colspan="3" class="dim">No message sends were executed.</td></tr>`
   }</tbody>
